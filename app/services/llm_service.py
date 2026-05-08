@@ -2,10 +2,7 @@ import requests
 import json
 
 from app.core.logger import logger
-
-
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "qwen2.5:7b"
+from app.core.config import OLLAMA_URL, OLLAMA_MODEL
 
 
 def clean_llama_json(llama_json):
@@ -46,7 +43,7 @@ def extract_output(raw_data: str) -> dict:
         response = requests.post(
             OLLAMA_URL,
             json={
-                "model": MODEL_NAME,
+                "model": OLLAMA_MODEL,
                 "prompt": prompt,
                 "stream": False
             },
