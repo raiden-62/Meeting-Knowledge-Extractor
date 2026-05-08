@@ -6,7 +6,7 @@ client = TestClient(app)
 
 def test_analyze():
     response = client.post("/analyze", json={
-        "transcript": "We decided to use FastAPI. Alex will implement it."
+        "transcript": "Jessica will make the C++ server, Bob will do UI and UX"
     })
 
     assert response.status_code == 200

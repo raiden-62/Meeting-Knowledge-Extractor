@@ -1,8 +1,11 @@
 import requests
 import json
 
+from app.core.logger import logger
+
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL_NAME = "qwen2.5:7b"
 
 
 def clean_llama_json(llama_json):
@@ -37,17 +40,47 @@ def extract_output(raw_data: str) -> dict:
     {raw_data}
     """
 
-    response = requests.post(
-        OLLAMA_URL,
-        json={
-            "model": "qwen2.5:7b",
-            "prompt": prompt,
-            "stream": False
-        }
-    )
+    try:
+        logger.info("Sending request to Ollama")
+
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": MODEL_NAME,
+                "prompt": prompt,
+                "stream": False
+            },
+            timeout=60
+        )
+
+        response.raise_for_status()
 
 
-    result = response.json()["response"]
-    result = clean_llama_json(result)
+        result = response.json()["response"]
 
-    return json.loads(result)
+        logger.info("Received response from Ollama")
+
+        result = clean_llama_json(result)
+
+        return json.loads(result)
+
+    except requests.exceptions.Timeout:
+        logger.error("Ollama request timed out")
+
+    except requests.exceptions.ConnectionError:
+        logger.error("Could not connect to Ollama")
+
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"Ollama HTTP error: {e}")
+
+    except json.JSONDecodeError:
+        logger.error("Failed to parse LLM response as JSON")
+
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+
+    return {
+        "decisions": [],
+        "tasks": [],
+        "responsible_people": []
+    }
