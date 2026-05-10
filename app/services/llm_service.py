@@ -52,7 +52,6 @@ def extract_output(raw_data: str) -> dict:
 
         response.raise_for_status()
 
-
         result = response.json()["response"]
 
         logger.info("Received response from Ollama")
