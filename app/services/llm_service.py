@@ -2,7 +2,7 @@ import requests
 import json
 
 from app.core.logger import logger
-from app.core.config import OLLAMA_URL, OLLAMA_MODEL
+from app.integrations.llm_api import gigachat_request
 
 
 def clean_llama_json(llama_json):
@@ -19,46 +19,33 @@ def clean_llama_json(llama_json):
     return result
 
 def extract_output(raw_data: str) -> dict:
-    prompt = f"""
-    Return ONLY valid JSON in this schema:
+    prompt = """
+    Проанализируй этот текст и извлеки задачи, решения и людей ответственных за задачи.
+    Верни свой ответ ТОЛЬКО в виде json такого вида:
+    {
+      "decisions": [],
+      "people": {
+        "name1": ["task1", "task2"],
+        "name2": ["task3", "task4"]
+      }
+    }
 
-    {{
-      "decisions": ["string"],
-      "tasks": [
-        {{
-          "task": "string",
-          "assignee": "string|null"
-        }}
-      ],
-      "responsible_people": ["string"]
-    }}
-
-    Input:
-    {raw_data}
+    Текст:
     """
+    prompt += raw_data
+
 
     try:
         logger.info("Sending request to Ollama")
 
-        response = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "prompt": prompt,
-                "stream": False
-            },
-            timeout=60
-        )
-
-        response.raise_for_status()
-
-        result = response.json()["response"]
+        result = gigachat_request(prompt)
 
         logger.info("Received response from Ollama")
 
-        result = clean_llama_json(result)
+        answer = result.get("answer")
+        #response = clean_llama_json(response)
 
-        return json.loads(result)
+        return json.loads(answer)
 
     except requests.exceptions.Timeout:
         logger.error("Ollama request timed out")

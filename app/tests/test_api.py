@@ -22,8 +22,7 @@ def test_analyze():
     data = response.json()
 
     assert isinstance(data["decisions"], list)
-    assert isinstance(data["tasks"], list)
-    assert isinstance(data["responsible_people"], list)
+    assert isinstance(data["people"], dict)
 
 
 def test_transcript_too_long():
