@@ -11,7 +11,6 @@ gigachat = GigaChat(
 )
 
 def gigachat_request(request: str):
-    logger.info("Sending request to gigachat")
     try:
         response = gigachat.chat(request)
 

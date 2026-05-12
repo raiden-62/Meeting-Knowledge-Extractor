@@ -36,11 +36,11 @@ def extract_output(raw_data: str) -> dict:
 
 
     try:
-        logger.info("Sending request to Ollama")
+        logger.info("Sending request to GigaChat")
 
         result = gigachat_request(prompt)
 
-        logger.info("Received response from Ollama")
+        logger.info("Received response from GigaChat")
 
         answer = result.get("answer")
         #response = clean_llama_json(response)
