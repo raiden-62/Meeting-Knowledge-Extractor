@@ -27,8 +27,7 @@ JUDGE_PROMPT = """
   "missed_decisions": 0,
   "misattributed_tasks": 0,
   "clarity_rating": 0,
-  "overall_score": 0,
-  "comments": "строка с комментариями"
+  "overall_score": 0
 }}
 
 Стенограмма:

@@ -9,11 +9,11 @@ gigachat_judge = GigaChat(
     credentials=GIGACHAT_TOKEN,
     verify_ssl_certs = False,
     scope="GIGACHAT_API_PERS",
-    #model="GigaChat-Pro"
+    #model="GigaChat-Pro" uses too many tokens out of 50k
 )
 
 def gigachat_request(request: str):
-    print("Sending request to GigaChat Pro judge")
+    print("Sending request to GigaChat judge")
     try:
         response = gigachat_judge.chat(request)
 
@@ -63,9 +63,11 @@ def evaluate_response(
 
     raw_response = gigachat_request(prompt)
     clean_response = clean_json_response(raw_response)
-    print("---------Response thats supposed to be clean json-----------")
-    print(clean_response)
-    print("------------------------------------------------------------")
+
+    # print("---------Response that's supposed to be clean json-----------")
+    # print(clean_response)
+    # print("-------------------------------------------------------------")
+
     return json.loads(clean_response)
 
 
