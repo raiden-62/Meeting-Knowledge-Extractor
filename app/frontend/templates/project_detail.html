@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block content %}
+{% set metrics = latest_output.get("metrics", {}) if latest_output else {} %}
+{% set risks = latest_output.get("risks", []) if latest_output else [] %}
+
+<section class="project-header">
+    <div>
+        <p class="kicker">Project #{{ project.id }}</p>
+        <h1>{{ project.name }}</h1>
+        <p class="lead">{{ project.description or "Без описания" }}</p>
+    </div>
+    <a class="ghost-link" href="/projects">Назад к проектам</a>
+</section>
+
+<section class="stats-grid" aria-label="Сводка проекта">
+    <div class="stat">
+        <span>Задачи</span>
+        <strong>{{ task_stats.total }}</strong>
+        <small>{{ task_stats.todo }} todo · {{ task_stats.in_progress }} in progress · {{ task_stats.done }} done</small>
+    </div>
+    <div class="stat">
+        <span>Решения</span>
+        <strong>{{ decisions|length }}</strong>
+        <small>сохранены в проекте</small>
+    </div>
+    <div class="stat">
+        <span>Ответственные</span>
+        <strong>{{ people|length }}</strong>
+        <small>участники с задачами</small>
+    </div>
+    <div class="stat">
+        <span>Последний запуск</span>
+        <strong>{{ "%.2f"|format(runs[0].response_time_seconds or 0) if runs else "0.00" }}s</strong>
+        <small>{{ runs[0].provider if runs else "не запускался" }}</small>
+    </div>
+</section>
+
+<section class="layout-two">
+    <div class="panel">
+        <h2>Загрузка стенограммы</h2>
+        <form action="/projects/{{ project.id }}/transcripts" method="post" enctype="multipart/form-data">
+            <label>
+                TXT-файл
+                <input type="file" name="file" accept=".txt,text/plain">
+            </label>
+            <label>
+                Или вставьте текст
+                <textarea name="transcript_text" rows="8" maxlength="{{ max_transcript_chars }}" placeholder="Вставьте стенограмму встречи до {{ max_transcript_chars }} символов"></textarea>
+            </label>
+            <button type="submit" class="primary">Сохранить стенограмму</button>
+        </form>
+    </div>
+
+    <div class="panel">
+        <h2>LLM-анализ</h2>
+        <form action="/projects/{{ project.id }}/extract" method="post">
+            <label>
+                Стенограмма
+                <select name="transcript_id" required>
+                    {% for transcript in transcripts %}
+                    <option value="{{ transcript.id }}">
+                        #{{ transcript.id }} · {{ transcript.source_filename or "Вставленный текст" }} · {{ transcript.created_at.strftime("%Y-%m-%d %H:%M") }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button type="submit" class="primary" {% if not transcripts %}disabled{% endif %}>Запустить извлечение</button>
+        </form>
+
+        <div class="insight-box">
+            <span class="meta">Последняя сводка</span>
+            <p>{{ latest_output.get("summary", "Запустите анализ, чтобы получить краткое резюме встречи.") if latest_output else "Запустите анализ, чтобы получить краткое резюме встречи." }}</p>
+            <div class="metric-line">
+                <span>{{ metrics.get("tasks_count", 0) }} задач</span>
+                <span>{{ metrics.get("decisions_count", 0) }} решений</span>
+                <span>{{ metrics.get("risks_count", 0) }} рисков</span>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="layout-two">
+    <div class="panel">
+        <div class="section-head">
+            <h2>Решения</h2>
+        </div>
+        <form action="/projects/{{ project.id }}/decisions" method="post" class="inline-form">
+            <input type="text" name="description" placeholder="Новое решение" required>
+            <button type="submit">Добавить</button>
+        </form>
+        <ul class="stack">
+            {% for decision in decisions %}
+            <li>{{ decision.description }}</li>
+            {% else %}
+            <li class="muted">Решений пока нет.</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="panel">
+        <div class="section-head">
+            <h2>Риски и блокеры</h2>
+        </div>
+        <ul class="stack">
+            {% for risk in risks %}
+            <li>{{ risk }}</li>
+            {% else %}
+            <li class="muted">Явных рисков в последнем запуске нет.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</section>
+
+<section class="panel">
+    <div class="section-head">
+        <div>
+            <h2>Задачи</h2>
+            <p class="muted">Фильтруйте, назначайте ответственных и обновляйте статус после встречи.</p>
+        </div>
+    </div>
+
+    <form class="filters" method="get" action="/projects/{{ project.id }}">
+        <select name="status">
+            <option value="">Все статусы</option>
+            <option value="todo" {% if filters.status == "todo" %}selected{% endif %}>todo</option>
+            <option value="in_progress" {% if filters.status == "in_progress" %}selected{% endif %}>in_progress</option>
+            <option value="done" {% if filters.status == "done" %}selected{% endif %}>done</option>
+        </select>
+        <select name="person_id">
+            <option value="">Все ответственные</option>
+            {% for person in people %}
+            <option value="{{ person.id }}" {% if filters.person_id|string == person.id|string %}selected{% endif %}>{{ person.name }}</option>
+            {% endfor %}
+        </select>
+        <select name="priority">
+            <option value="">Все приоритеты</option>
+            <option value="low" {% if filters.priority == "low" %}selected{% endif %}>low</option>
+            <option value="medium" {% if filters.priority == "medium" %}selected{% endif %}>medium</option>
+            <option value="high" {% if filters.priority == "high" %}selected{% endif %}>high</option>
+        </select>
+        <button type="submit">Применить</button>
+        <a class="ghost-link" href="/projects/{{ project.id }}">Сбросить</a>
+    </form>
+
+    <form action="/projects/{{ project.id }}/tasks" method="post" class="task-form">
+        <input type="text" name="description" placeholder="Описание задачи" required>
+        <select name="person_id">
+            <option value="">Без ответственного</option>
+            {% for person in people %}
+            <option value="{{ person.id }}">{{ person.name }}</option>
+            {% endfor %}
+        </select>
+        <select name="status">
+            <option value="todo">todo</option>
+            <option value="in_progress">in_progress</option>
+            <option value="done">done</option>
+        </select>
+        <select name="priority">
+            <option value="low">low</option>
+            <option value="medium" selected>medium</option>
+            <option value="high">high</option>
+        </select>
+        <input type="date" name="due_date">
+        <button type="submit" class="primary">Добавить</button>
+    </form>
+
+    <div class="task-table">
+        <div class="task-row task-head">
+            <span>Задача</span>
+            <span>Ответственный</span>
+            <span>Статус</span>
+            <span>Приоритет</span>
+            <span>Срок</span>
+            <span></span>
+        </div>
+        {% for task in tasks %}
+        <form action="/projects/{{ project.id }}/tasks/{{ task.id }}/edit" method="post" class="task-row">
+            <input type="text" name="description" value="{{ task.description }}" required>
+            <select name="person_id">
+                <option value="">Без ответственного</option>
+                {% for person in people %}
+                <option value="{{ person.id }}" {% if task.person_id == person.id %}selected{% endif %}>{{ person.name }}</option>
+                {% endfor %}
+            </select>
+            <select name="status">
+                <option value="todo" {% if task.status == "todo" %}selected{% endif %}>todo</option>
+                <option value="in_progress" {% if task.status == "in_progress" %}selected{% endif %}>in_progress</option>
+                <option value="done" {% if task.status == "done" %}selected{% endif %}>done</option>
+            </select>
+            <select name="priority">
+                <option value="low" {% if task.priority == "low" %}selected{% endif %}>low</option>
+                <option value="medium" {% if task.priority == "medium" %}selected{% endif %}>medium</option>
+                <option value="high" {% if task.priority == "high" %}selected{% endif %}>high</option>
+            </select>
+            <input type="date" name="due_date" value="{{ task.due_date.isoformat() if task.due_date else '' }}">
+            <button type="submit">Сохранить</button>
+        </form>
+        {% else %}
+        <div class="empty">Задач по выбранным фильтрам нет.</div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="layout-two">
+    <div class="panel">
+        <h2>Ответственные</h2>
+        <form action="/projects/{{ project.id }}/people" method="post" class="inline-form">
+            <input type="text" name="name" placeholder="Имя" required>
+            <input type="text" name="role" placeholder="Роль">
+            <button type="submit">Добавить</button>
+        </form>
+        <div class="people-list">
+            {% for person in people %}
+            <form action="/projects/{{ project.id }}/people/{{ person.id }}/edit" method="post" class="person-row">
+                <input type="text" name="name" value="{{ person.name }}" required>
+                <input type="text" name="role" value="{{ person.role or '' }}" placeholder="Роль">
+                <button type="submit">Сохранить</button>
+            </form>
+            {% else %}
+            <div class="muted">Участники появятся после анализа или ручного добавления.</div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>История запусков</h2>
+        <div class="run-list">
+            {% for run in runs %}
+            <div class="run-row">
+                <strong>Run #{{ run.id }}</strong>
+                <span>{{ run.provider }} · {{ run.model_name or "default" }}</span>
+                <span>{{ run.status }} · {{ "%.2f"|format(run.response_time_seconds or 0) }}s</span>
+                <small>{{ run.created_at.strftime("%Y-%m-%d %H:%M") }}</small>
+            </div>
+            {% else %}
+            <div class="muted">Запусков пока нет.</div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}

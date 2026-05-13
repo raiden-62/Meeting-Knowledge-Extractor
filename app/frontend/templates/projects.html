@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-title">
+    <div>
+        <p class="kicker">Workspace</p>
+        <h1>Проекты встреч</h1>
+        <p class="lead">Загружайте стенограммы, извлекайте решения и превращайте обсуждения в понятный план действий.</p>
+    </div>
+    <a class="ghost-link" href="/docs">Открыть Swagger</a>
+</section>
+
+<section class="layout-two">
+    <form class="panel compact-form" action="/projects" method="post">
+        <h2>Новый проект</h2>
+        <label>
+            Название
+            <input type="text" name="name" placeholder="Например: Запуск CRM" required>
+        </label>
+        <label>
+            Описание
+            <textarea name="description" rows="4" placeholder="Контекст проекта, команда, цель анализа"></textarea>
+        </label>
+        <button type="submit" class="primary">Создать проект</button>
+    </form>
+
+    <section class="panel">
+        <div class="section-head">
+            <div>
+                <h2>Активные проекты</h2>
+                <p class="muted">{{ projects|length }} в работе</p>
+            </div>
+        </div>
+
+        <div class="project-list">
+            {% for project in projects %}
+            <a class="project-row" href="/projects/{{ project.id }}">
+                <span class="project-id">#{{ project.id }}</span>
+                <span>
+                    <strong>{{ project.name }}</strong>
+                    <small>{{ project.description or "Без описания" }}</small>
+                </span>
+                <span class="meta">Создан {{ project.created_at.strftime("%Y-%m-%d") }}</span>
+            </a>
+            {% else %}
+            <div class="empty">Проектов пока нет. Создайте первый проект слева.</div>
+            {% endfor %}
+        </div>
+    </section>
+</section>
+{% endblock %}

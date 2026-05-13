@@ -4,3 +4,6 @@ venv/
 .vscode/
 .env
 app/api/evaluation/reports
+__pycache__/
+*.py[cod]
+app.db
