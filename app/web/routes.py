@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from app.core.config import MAX_TRANSCRIPT_CHARS
+from app.core.config import LLM_PROVIDER, LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
 from app.db import models
 from app.db.database import get_db
 from app.services.extraction_service import run_extraction
@@ -14,6 +14,8 @@ router = APIRouter(tags=["ui"])
 
 templates = Jinja2Templates(directory="app/frontend/templates")
 templates.env.globals["max_transcript_chars"] = MAX_TRANSCRIPT_CHARS
+templates.env.globals["llm_provider"] = LLM_PROVIDER
+templates.env.globals["llm_providers"] = LLM_PROVIDERS
 
 
 def parse_due_date(value: str | None):
@@ -34,6 +36,16 @@ def validate_transcript_content(content: str) -> str:
             status_code=400,
             detail=f"Transcript must be no longer than {MAX_TRANSCRIPT_CHARS} chars",
         )
+    return cleaned
+
+
+def validate_provider(provider: str | None) -> str | None:
+    if provider is None or not provider.strip():
+        return None
+    cleaned = provider.strip().lower()
+    if cleaned not in LLM_PROVIDERS:
+        allowed = ", ".join(LLM_PROVIDERS)
+        raise HTTPException(status_code=400, detail=f"Provider must be one of: {allowed}")
     return cleaned
 
 
@@ -191,6 +203,7 @@ def upload_transcript(
 def extract_transcript(
     project_id: int,
     transcript_id: int = Form(...),
+    provider: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     transcript = (
@@ -204,7 +217,7 @@ def extract_transcript(
     if not transcript:
         raise HTTPException(status_code=404, detail="Transcript not found")
 
-    run_extraction(db, transcript)
+    run_extraction(db, transcript, provider=validate_provider(provider))
     db.commit()
 
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
@@ -317,6 +330,25 @@ def edit_task(
     task.priority = priority
     task.due_date = parsed_due_date
 
+    db.commit()
+    return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
+
+
+@router.post("/projects/{project_id}/tasks/{task_id}/delete")
+def delete_task(
+    project_id: int,
+    task_id: int,
+    db: Session = Depends(get_db),
+):
+    task = (
+        db.query(models.Task)
+        .filter(models.Task.id == task_id, models.Task.project_id == project_id)
+        .first()
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    db.delete(task)
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 

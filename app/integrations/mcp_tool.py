@@ -9,7 +9,7 @@ from pydantic import ValidationError
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parents[2]))
 
-from app.core.config import MAX_TRANSCRIPT_CHARS
+from app.core.config import LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
 from app.schemas.schemas import AnalyzeRequest
 from app.services.meeting_pipeline import process_meeting
 
@@ -24,6 +24,11 @@ TOOL_SCHEMA = {
                 "minLength": 1,
                 "maxLength": MAX_TRANSCRIPT_CHARS,
                 "description": "Meeting transcript text up to 20,000 characters",
+            },
+            "provider": {
+                "type": "string",
+                "enum": list(LLM_PROVIDERS),
+                "description": "Optional LLM provider: gigachat or deepseek",
             }
         },
         "required": ["transcript"],
@@ -33,7 +38,7 @@ TOOL_SCHEMA = {
 
 def execute_tool(arguments: dict[str, Any]) -> dict[str, Any]:
     request = AnalyzeRequest.model_validate(arguments)
-    return process_meeting(request.transcript)
+    return process_meeting(request.transcript, provider=request.provider)
 
 
 def _load_payload(stdin_text: str, transcript_arg: str | None) -> dict[str, Any]:
@@ -58,10 +63,13 @@ def _load_payload(stdin_text: str, transcript_arg: str | None) -> dict[str, Any]
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Meeting Knowledge Extractor MCP tool")
     parser.add_argument("--transcript", help="Transcript text. If omitted, stdin is used.")
+    parser.add_argument("--provider", choices=LLM_PROVIDERS, help="LLM provider to use.")
     args = parser.parse_args(argv)
 
     try:
         payload = _load_payload(sys.stdin.read(), args.transcript)
+        if args.provider:
+            payload["provider"] = args.provider
         result = execute_tool(payload)
     except (ValidationError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)

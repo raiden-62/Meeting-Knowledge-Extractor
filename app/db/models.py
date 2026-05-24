@@ -119,6 +119,16 @@ class Task(Base):
     assignee: Mapped[Person | None] = relationship(back_populates="tasks")
     source_run: Mapped[ExtractionRun | None] = relationship(back_populates="tasks")
 
+    @property
+    def meeting_date(self) -> datetime:
+        if self.source_run and self.source_run.transcript:
+            return self.source_run.transcript.created_at
+        return self.created_at
+
+    @property
+    def last_updated_at(self) -> datetime:
+        return self.updated_at
+
 
 class Decision(Base):
     __tablename__ = "decisions"

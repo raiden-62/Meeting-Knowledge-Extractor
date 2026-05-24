@@ -3,6 +3,7 @@ import json
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.core.config import MAX_TRANSCRIPT_CHARS
 from app.services import extraction_service, llm_service, meeting_pipeline
 
 client = TestClient(app)
@@ -18,7 +19,7 @@ def sample_response():
                 "assignee": "Анна",
                 "status": "todo",
                 "priority": "medium",
-                "due_date": None,
+                "due_date": "2026-06-01",
             },
             {
                 "description": "update roadmap",
@@ -84,8 +85,52 @@ def test_analyze_uses_fallback_without_llm(monkeypatch):
     assert data["metrics"]["tasks_count"] >= 2
 
 
+def test_fallback_extracts_simple_due_date(monkeypatch):
+    monkeypatch.setattr(
+        llm_service,
+        "gigachat_request",
+        lambda prompt: (_ for _ in ()).throw(RuntimeError("network disabled")),
+    )
+
+    response = client.post(
+        "/analyze",
+        json={"transcript": "Анна подготовит презентацию до 01.06.2026."},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["tasks"][0]["due_date"] == "2026-06-01"
+    assert "01.06.2026" not in response.json()["tasks"][0]["description"]
+
+    month_response = client.post(
+        "/analyze",
+        json={"transcript": "Анна подготовит отчет к 1 июня 2026."},
+    )
+    assert month_response.status_code == 200
+    assert month_response.json()["tasks"][0]["due_date"] == "2026-06-01"
+
+
+def test_analyze_can_use_deepseek(monkeypatch):
+    response_payload = sample_response()
+    monkeypatch.setattr(
+        llm_service,
+        "deepseek_request",
+        lambda prompt: {"answer": json.dumps(response_payload), "model_name": "deepseek-chat"},
+    )
+
+    response = client.post(
+        "/analyze",
+        json={"transcript": "Bob will update roadmap.", "provider": "deepseek"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "deepseek"
+    assert data["model_name"] == "deepseek-chat"
+    assert data["tasks"][0]["due_date"] == "2026-06-01"
+
+
 def test_transcript_too_long():
-    transcript = "A" * (20_000 + 1)
+    transcript = "A" * (MAX_TRANSCRIPT_CHARS + 1)
 
     response = client.post("/analyze", json={"transcript": transcript})
 
@@ -135,6 +180,21 @@ def test_normalize_response_adds_business_shape():
     assert normalized["metrics"]["tasks_count"] == 1
 
 
+def test_long_transcript_is_compressed_for_llm():
+    transcript = "Общее обсуждение без решений. " * 2500
+    transcript += "Анна должна подготовить презентацию до 01.06.2026. Риск задержки из-за API."
+
+    compressed, notes = llm_service.build_economical_transcript(
+        transcript,
+        memory_context="Открытые задачи: #1 Анна: подготовить презентацию",
+        max_chars=4000,
+    )
+
+    assert len(compressed) <= 4000
+    assert "подготовить презентацию" in compressed
+    assert notes
+
+
 def test_mcp_schema_and_execute(monkeypatch):
     monkeypatch.setattr(meeting_pipeline, "extract_output", lambda transcript: sample_response())
 
@@ -151,7 +211,11 @@ def test_mcp_schema_and_execute(monkeypatch):
 
 
 def test_project_flow_creates_extracted_entities(monkeypatch):
-    monkeypatch.setattr(extraction_service, "process_meeting", lambda transcript: sample_response())
+    monkeypatch.setattr(
+        extraction_service,
+        "process_meeting",
+        lambda transcript, **kwargs: sample_response(),
+    )
 
     project_response = client.post(
         "/api/projects",
@@ -188,7 +252,73 @@ def test_project_flow_creates_extracted_entities(monkeypatch):
         "подготовить презентацию",
         "update roadmap",
     }
+    assert next(task for task in tasks if task["description"] == "подготовить презентацию")["due_date"] == "2026-06-01"
     assert decisions[0]["description"] == "Решили запустить пилот CRM."
+
+
+def test_project_extraction_marks_existing_task_done(monkeypatch):
+    def empty_agent_response(transcript, **kwargs):
+        return {
+            "summary": "Статусы обновлены по стенограмме.",
+            "decisions": [],
+            "tasks": [],
+            "task_updates": [],
+            "people": {},
+            "risks": [],
+            "metrics": {},
+            "agent_notes": [],
+            "source": "test",
+            "model_name": "mock",
+        }
+
+    monkeypatch.setattr(extraction_service, "process_meeting", empty_agent_response)
+
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Lifecycle Demo", "description": "Task status memory"},
+    )
+    project_id = project_response.json()["id"]
+
+    person_response = client.post(
+        f"/api/projects/{project_id}/people",
+        json={"name": "Анна"},
+    )
+    person_id = person_response.json()["id"]
+
+    task_response = client.post(
+        f"/api/projects/{project_id}/tasks",
+        json={
+            "description": "подготовить презентацию",
+            "person_id": person_id,
+            "status": "todo",
+            "priority": "medium",
+            "due_date": "2026-05-30",
+        },
+    )
+    task_id = task_response.json()["id"]
+    assert task_response.json()["due_date"] == "2026-05-30"
+    assert task_response.json()["meeting_date"] is not None
+    assert task_response.json()["last_updated_at"] is not None
+
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={"transcript_text": "Анна сказала, что презентация готова."},
+    )
+    transcript_id = transcript_response.json()["id"]
+
+    run_response = client.post(
+        f"/api/projects/{project_id}/extract",
+        data={"transcript_id": transcript_id, "provider": "gigachat"},
+    )
+
+    assert run_response.status_code == 200
+    tasks = client.get(f"/api/projects/{project_id}/tasks").json()
+    updated_task = next(task for task in tasks if task["id"] == task_id)
+    assert updated_task["status"] == "done"
+
+    delete_response = client.delete(f"/api/projects/{project_id}/tasks/{task_id}")
+    assert delete_response.status_code == 200
+    assert client.get(f"/api/projects/{project_id}/tasks").json() == []
 
 
 def test_ui_pages_render():
@@ -201,11 +331,57 @@ def test_ui_pages_render():
         json={"name": "UI Demo", "description": "Render check"},
     )
     project_id = project_response.json()["id"]
+    client.post(
+        f"/api/projects/{project_id}/tasks",
+        json={
+            "description": "Очень длинная задача, которую нужно удобно раскрывать и закрывать на странице проекта",
+            "status": "todo",
+            "priority": "medium",
+            "due_date": "2026-06-10",
+        },
+    )
 
     detail_page = client.get(f"/projects/{project_id}")
     assert detail_page.status_code == 200
     assert "LLM-анализ" in detail_page.text
+    assert "API-провайдер" in detail_page.text
+    assert "deepseek" in detail_page.text
+    assert "Удалить" in detail_page.text
+    assert "10.06.2026" not in detail_page.text
+    assert "Срок" not in detail_page.text
+    assert "Дата поручения" in detail_page.text
+    assert "Дата встречи" in detail_page.text
+    assert "Обновлено" in detail_page.text
+    assert "<details" not in detail_page.text
     assert "Задачи" in detail_page.text
+
+
+def test_ui_task_create_without_due_date():
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Task UI", "description": "Manual task check"},
+    )
+    project_id = project_response.json()["id"]
+
+    create_response = client.post(
+        f"/projects/{project_id}/tasks",
+        data={
+            "description": "Проверить строку задачи",
+            "status": "todo",
+            "priority": "medium",
+        },
+        follow_redirects=False,
+    )
+    assert create_response.status_code == 303
+
+    tasks = client.get(f"/api/projects/{project_id}/tasks").json()
+    assert tasks[0]["description"] == "Проверить строку задачи"
+    assert tasks[0]["due_date"] is None
+
+    detail_page = client.get(f"/projects/{project_id}")
+    assert detail_page.status_code == 200
+    assert "Дата поручения" in detail_page.text
+    assert "Срок" not in detail_page.text
 
 
 def test_mcp_cli_payload_loader_accepts_plain_text():

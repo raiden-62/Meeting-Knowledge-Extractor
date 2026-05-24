@@ -3,11 +3,12 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.core.config import MAX_TRANSCRIPT_CHARS
+from app.core.config import LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
 
 
 class AnalyzeRequest(BaseModel):
     transcript: str = Field(..., min_length=1, max_length=MAX_TRANSCRIPT_CHARS)
+    provider: Optional[str] = None
 
     @field_validator("transcript")
     @classmethod
@@ -15,6 +16,17 @@ class AnalyzeRequest(BaseModel):
         cleaned = value.strip()
         if not cleaned:
             raise ValueError("Transcript content is required")
+        return cleaned
+
+    @field_validator("provider")
+    @classmethod
+    def provider_must_be_supported(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip().lower()
+        if cleaned not in LLM_PROVIDERS:
+            allowed = ", ".join(LLM_PROVIDERS)
+            raise ValueError(f"Provider must be one of: {allowed}")
         return cleaned
 
 
@@ -28,20 +40,33 @@ class ExtractedTask(BaseModel):
 
 class ExtractionMetrics(BaseModel):
     transcript_chars: int = 0
+    llm_transcript_chars: int = 0
     decisions_count: int = 0
     tasks_count: int = 0
     people_count: int = 0
     risks_count: int = 0
+    task_updates_count: int = 0
     response_time_seconds: Optional[float] = None
+
+
+class ExtractedTaskUpdate(BaseModel):
+    task_id: Optional[int] = None
+    description: str = ""
+    assignee: Optional[str] = None
+    status: str = "done"
+    due_date: Optional[str] = None
+    reason: Optional[str] = None
 
 
 class AnalyzeResponse(BaseModel):
     summary: str = ""
     decisions: List[str] = Field(default_factory=list)
     tasks: List[ExtractedTask] = Field(default_factory=list)
+    task_updates: List[ExtractedTaskUpdate] = Field(default_factory=list)
     people: Dict[str, List[str]] = Field(default_factory=dict)
     risks: List[str] = Field(default_factory=list)
     metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
+    agent_notes: List[str] = Field(default_factory=list)
     source: str = "fallback"
     model_name: Optional[str] = None
 
@@ -131,6 +156,8 @@ class TaskRead(BaseModel):
     status: str
     priority: str
     due_date: Optional[date] = None
+    meeting_date: Optional[datetime] = None
+    last_updated_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
