@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.core.config import MAX_TRANSCRIPT_CHARS
+from app.integrations import llm_api
 from app.services import extraction_service, llm_service, meeting_pipeline
 
 client = TestClient(app)
@@ -54,7 +55,7 @@ def test_health():
     assert response.json() == {"status": "ok"}
 
 
-def test_analyze_uses_fallback_without_llm(monkeypatch):
+def test_analyze_returns_provider_error_without_llm(monkeypatch):
     monkeypatch.setattr(
         llm_service,
         "gigachat_request",
@@ -69,44 +70,30 @@ def test_analyze_uses_fallback_without_llm(monkeypatch):
                 "Анна подготовит презентацию. "
                 "Bob will update roadmap. "
                 "Риск задержки из-за API."
-            )
+            ),
+            "provider": "gigachat",
         },
     )
 
-    assert response.status_code == 200
-
-    data = response.json()
-    assert data["source"] == "fallback"
-    assert data["decisions"]
-    assert len(data["tasks"]) >= 2
-    assert "Анна" in data["people"]
-    assert "Bob" in data["people"]
-    assert data["risks"]
-    assert data["metrics"]["tasks_count"] >= 2
+    assert response.status_code == 502
+    assert response.json()["detail"] == {
+        "provider": "gigachat",
+        "reason": "network disabled",
+    }
 
 
-def test_fallback_extracts_simple_due_date(monkeypatch):
-    monkeypatch.setattr(
-        llm_service,
-        "gigachat_request",
-        lambda prompt: (_ for _ in ()).throw(RuntimeError("network disabled")),
+def test_fallback_extracts_simple_due_date_directly():
+    data = llm_service.fallback_extract(
+        "Анна подготовит презентацию до 01.06.2026."
     )
 
-    response = client.post(
-        "/analyze",
-        json={"transcript": "Анна подготовит презентацию до 01.06.2026."},
-    )
+    assert data["tasks"][0]["due_date"] == "2026-06-01"
+    assert "01.06.2026" not in data["tasks"][0]["description"]
 
-    assert response.status_code == 200
-    assert response.json()["tasks"][0]["due_date"] == "2026-06-01"
-    assert "01.06.2026" not in response.json()["tasks"][0]["description"]
-
-    month_response = client.post(
-        "/analyze",
-        json={"transcript": "Анна подготовит отчет к 1 июня 2026."},
+    month_data = llm_service.fallback_extract(
+        "Анна подготовит отчет к 1 июня 2026."
     )
-    assert month_response.status_code == 200
-    assert month_response.json()["tasks"][0]["due_date"] == "2026-06-01"
+    assert month_data["tasks"][0]["due_date"] == "2026-06-01"
 
 
 def test_analyze_can_use_deepseek(monkeypatch):
@@ -127,6 +114,47 @@ def test_analyze_can_use_deepseek(monkeypatch):
     assert data["source"] == "deepseek"
     assert data["model_name"] == "deepseek-chat"
     assert data["tasks"][0]["due_date"] == "2026-06-01"
+
+
+def test_deepseek_request_uses_fast_json_payload(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "model": "deepseek-v4-flash",
+                "choices": [{"message": {"content": '{"summary": "ok"}'}}],
+            }
+
+    def fake_post(url, json, headers, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    class FakeSession:
+        post = staticmethod(fake_post)
+
+    monkeypatch.setattr(llm_api, "DEEPSEEK_API_KEY", "test-key")
+    monkeypatch.setattr(llm_api, "DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    monkeypatch.setattr(llm_api, "DEEPSEEK_MODEL", "deepseek-v4-flash")
+    monkeypatch.setattr(llm_api, "DEEPSEEK_THINKING", "disabled")
+    monkeypatch.setattr(llm_api, "DEEPSEEK_MAX_TOKENS", 1200)
+    monkeypatch.setattr(llm_api, "DEEPSEEK_TIMEOUT_SECONDS", 12)
+    monkeypatch.setattr(llm_api, "DEEPSEEK_MAX_RETRIES", 1)
+    monkeypatch.setattr(llm_api, "get_deepseek_session", lambda: FakeSession())
+
+    result = llm_api.deepseek_request("Return json.")
+
+    assert result == {"answer": '{"summary": "ok"}', "model_name": "deepseek-v4-flash"}
+    assert captured["url"] == "https://api.deepseek.com/chat/completions"
+    assert captured["json"]["thinking"] == {"type": "disabled"}
+    assert captured["json"]["response_format"] == {"type": "json_object"}
+    assert captured["json"]["max_tokens"] == 1200
+    assert captured["timeout"] == 12
 
 
 def test_transcript_too_long():
@@ -256,13 +284,20 @@ def test_project_flow_creates_extracted_entities(monkeypatch):
     assert decisions[0]["description"] == "Решили запустить пилот CRM."
 
 
-def test_project_extraction_marks_existing_task_done(monkeypatch):
-    def empty_agent_response(transcript, **kwargs):
+def test_project_extraction_applies_api_task_update(monkeypatch):
+    def api_agent_response(transcript, **kwargs):
         return {
             "summary": "Статусы обновлены по стенограмме.",
             "decisions": [],
             "tasks": [],
-            "task_updates": [],
+            "task_updates": [
+                {
+                    "description": "подготовить презентацию",
+                    "assignee": "Анна",
+                    "status": "done",
+                    "reason": "API вернул, что презентация готова.",
+                }
+            ],
             "people": {},
             "risks": [],
             "metrics": {},
@@ -271,7 +306,7 @@ def test_project_extraction_marks_existing_task_done(monkeypatch):
             "model_name": "mock",
         }
 
-    monkeypatch.setattr(extraction_service, "process_meeting", empty_agent_response)
+    monkeypatch.setattr(extraction_service, "process_meeting", api_agent_response)
 
     project_response = client.post(
         "/api/projects",

@@ -209,6 +209,8 @@ def _text_similarity(left: str, right: str) -> float:
 
 
 def _task_assignee_name(task: models.Task) -> str:
+    if hasattr(task, "assignee_name"):
+        return str(getattr(task, "assignee_name") or "")
     return task.assignee.name if task.assignee else ""
 
 
@@ -259,20 +261,25 @@ def _split_segments(text: str) -> list[str]:
 
 
 class ProjectMemoryAgent:
+    def ensure_table(self, db: Session) -> None:
+        models.ProjectMemory.__table__.create(bind=db.get_bind(), checkfirst=True)
+
     def build(self, db: Session, transcript: models.Transcript) -> dict[str, Any]:
+        self.ensure_table(db)
         project = db.query(models.Project).filter(models.Project.id == transcript.project_id).first()
-        tasks = (
+        all_tasks = (
             db.query(models.Task)
             .filter(models.Task.project_id == transcript.project_id)
             .order_by(models.Task.updated_at.desc())
-            .limit(60)
+            .limit(120)
             .all()
         )
+        tasks = self._select_relevant_tasks(project, transcript, all_tasks)
         decisions = (
             db.query(models.Decision)
             .filter(models.Decision.project_id == transcript.project_id)
             .order_by(models.Decision.created_at.desc())
-            .limit(20)
+            .limit(12)
             .all()
         )
         people = (
@@ -281,15 +288,10 @@ class ProjectMemoryAgent:
             .order_by(models.Person.name.asc())
             .all()
         )
-        previous_transcripts = (
-            db.query(models.Transcript)
-            .filter(
-                models.Transcript.project_id == transcript.project_id,
-                models.Transcript.id != transcript.id,
-            )
-            .order_by(models.Transcript.created_at.desc())
-            .limit(5)
-            .all()
+        memory_record = (
+            db.query(models.ProjectMemory)
+            .filter(models.ProjectMemory.project_id == transcript.project_id)
+            .first()
         )
 
         return {
@@ -298,8 +300,53 @@ class ProjectMemoryAgent:
             "tasks": tasks,
             "decisions": decisions,
             "people": people,
-            "previous_transcripts": previous_transcripts,
+            "memory_summary": memory_record.summary if memory_record else "",
         }
+
+    def _select_relevant_tasks(
+        self,
+        project: models.Project | None,
+        transcript: models.Transcript,
+        tasks: list[models.Task],
+        limit: int = 25,
+    ) -> list[models.Task]:
+        if not tasks:
+            return []
+
+        context = " ".join(
+            [
+                transcript.content,
+                transcript.source_filename or "",
+                project.name if project else "",
+                project.description if project and project.description else "",
+            ]
+        )
+        context_tokens = _tokens(context)
+
+        ranked: list[tuple[int, int, models.Task]] = []
+        for index, task in enumerate(tasks):
+            task_tokens = _tokens(task.description)
+            overlap = len(task_tokens & context_tokens)
+            assignee = _task_assignee_name(task)
+            score = overlap * 4
+            if assignee and _normalize_text(assignee) in _normalize_text(context):
+                score += 4
+            if task.status != "done":
+                score += 3
+            if score > 0:
+                ranked.append((score, index, task))
+
+        relevant = [task for _, _, task in sorted(ranked, key=lambda item: (-item[0], item[1]))[:limit]]
+        if len(relevant) < min(limit, 10):
+            seen = {task.id for task in relevant}
+            for task in tasks:
+                if task.id in seen:
+                    continue
+                relevant.append(task)
+                seen.add(task.id)
+                if len(relevant) >= min(limit, 10):
+                    break
+        return relevant[:limit]
 
     def render(self, memory: dict[str, Any], max_chars: int = 6000) -> str:
         project = memory.get("project")
@@ -315,6 +362,11 @@ class ProjectMemoryAgent:
                 else "Текущая стенограмма: нет данных"
             ),
         ]
+
+        memory_summary = _clean_text(memory.get("memory_summary") or "")
+        if memory_summary:
+            lines.append("Сжатая память проекта:")
+            lines.append(memory_summary[:1800])
 
         people = memory.get("people") or []
         if people:
@@ -347,15 +399,59 @@ class ProjectMemoryAgent:
             for decision in decisions[:12]:
                 lines.append(f"- {decision.description}")
 
-        previous_transcripts = memory.get("previous_transcripts") or []
-        if previous_transcripts:
-            lines.append("Предыдущие сообщения/стенограммы:")
-            for item in previous_transcripts:
-                excerpt = _clean_text(item.content)[:500]
-                lines.append(f"- #{item.id} {item.created_at:%Y-%m-%d %H:%M}: {excerpt}")
-
         result = "\n".join(lines)
         return result[:max_chars]
+
+    def update_summary(
+        self,
+        db: Session,
+        transcript: models.Transcript,
+        raw_output: dict[str, Any],
+        max_chars: int = 3000,
+    ) -> None:
+        self.ensure_table(db)
+        project = db.query(models.Project).filter(models.Project.id == transcript.project_id).first()
+        tasks = (
+            db.query(models.Task)
+            .filter(models.Task.project_id == transcript.project_id)
+            .order_by(models.Task.updated_at.desc())
+            .limit(30)
+            .all()
+        )
+        decisions = (
+            db.query(models.Decision)
+            .filter(models.Decision.project_id == transcript.project_id)
+            .order_by(models.Decision.created_at.desc())
+            .limit(8)
+            .all()
+        )
+
+        lines = [
+            f"Проект: {project.name if project else transcript.project_id}",
+            f"Последняя сводка: {_clean_text(raw_output.get('summary') or 'нет')}",
+        ]
+        open_tasks = [task for task in tasks if task.status != "done"][:18]
+        if open_tasks:
+            lines.append("Ключевые открытые задачи:")
+            for task in open_tasks:
+                assignee = _task_assignee_name(task) or "без ответственного"
+                lines.append(f"- #{task.id} [{task.status}, {task.priority}] {assignee}: {task.description}")
+        if decisions:
+            lines.append("Последние решения:")
+            for decision in decisions:
+                lines.append(f"- {decision.description}")
+
+        summary = "\n".join(lines)[:max_chars]
+        memory = (
+            db.query(models.ProjectMemory)
+            .filter(models.ProjectMemory.project_id == transcript.project_id)
+            .first()
+        )
+        if memory is None:
+            memory = models.ProjectMemory(project_id=transcript.project_id, summary=summary)
+            db.add(memory)
+        else:
+            memory.summary = summary
 
 
 class TaskLifecycleAgent:
@@ -365,6 +461,8 @@ class TaskLifecycleAgent:
         transcript: models.Transcript,
         run: models.ExtractionRun,
         raw_output: dict[str, Any],
+        extra_updates: list[dict[str, str | int | None]] | None = None,
+        infer_updates: bool = False,
     ) -> dict[str, int]:
         stats = {
             "created_tasks": 0,
@@ -382,7 +480,10 @@ class TaskLifecycleAgent:
             .all()
         )
         updates = list(raw_output.get("task_updates") or [])
-        updates.extend(self.infer_task_updates(transcript.content, existing_tasks))
+        if extra_updates:
+            updates.extend(extra_updates)
+        if infer_updates:
+            updates.extend(self.infer_task_updates(transcript.content, existing_tasks))
         self._apply_task_updates(transcript, existing_tasks, updates, stats)
 
         tasks = self._task_payloads_from_output(raw_output)

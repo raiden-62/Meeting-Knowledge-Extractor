@@ -9,6 +9,7 @@ from app.core.config import LLM_PROVIDER, LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
 from app.db import models
 from app.db.database import get_db
 from app.services.extraction_service import run_extraction
+from app.services.llm_service import LLMProviderError
 
 router = APIRouter(tags=["ui"])
 
@@ -217,7 +218,13 @@ def extract_transcript(
     if not transcript:
         raise HTTPException(status_code=404, detail="Transcript not found")
 
-    run_extraction(db, transcript, provider=validate_provider(provider))
+    try:
+        run_extraction(db, transcript, provider=validate_provider(provider))
+    except LLMProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"{exc.provider}: {exc.reason}",
+        ) from exc
     db.commit()
 
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)

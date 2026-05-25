@@ -10,11 +10,23 @@ GIGACHAT_MODEL = os.getenv("GIGACHAT_MODEL", "GigaChat")
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_TOKEN")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_THINKING = os.getenv("DEEPSEEK_THINKING", "disabled").strip().lower()
+if DEEPSEEK_THINKING not in {"enabled", "disabled"}:
+    DEEPSEEK_THINKING = "disabled"
+DEEPSEEK_MAX_TOKENS = int(os.getenv("DEEPSEEK_MAX_TOKENS", "3500"))
+DEEPSEEK_TIMEOUT_SECONDS = int(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "45"))
+DEEPSEEK_MAX_RETRIES = int(os.getenv("DEEPSEEK_MAX_RETRIES", "1"))
 
 LLM_PROVIDERS = ("gigachat", "deepseek")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gigachat").strip().lower()
 if LLM_PROVIDER not in LLM_PROVIDERS:
     LLM_PROVIDER = "gigachat"
+LLM_USE_LANGGRAPH = os.getenv("LLM_USE_LANGGRAPH", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 MAX_TRANSCRIPT_CHARS = int(os.getenv("MAX_TRANSCRIPT_CHARS", "100000"))
 LLM_LONG_TRANSCRIPT_CHARS = int(os.getenv("LLM_LONG_TRANSCRIPT_CHARS", "30000"))

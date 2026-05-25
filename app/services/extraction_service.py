@@ -14,7 +14,9 @@ def run_extraction(
 ) -> models.ExtractionRun:
     start = time.time()
     memory_agent = ProjectMemoryAgent()
-    memory_context = memory_agent.render(memory_agent.build(db, transcript))
+    lifecycle_agent = TaskLifecycleAgent()
+    memory = memory_agent.build(db, transcript)
+    memory_context = memory_agent.render(memory)
     raw_output = process_meeting(
         transcript.content,
         provider=provider,
@@ -33,6 +35,14 @@ def run_extraction(
     db.add(run)
     db.flush()
 
-    TaskLifecycleAgent().apply(db, transcript, run, raw_output)
+    lifecycle_agent.apply(
+        db,
+        transcript,
+        run,
+        raw_output,
+        infer_updates=False,
+    )
+    memory_agent.update_summary(db, transcript, raw_output)
+    run.raw_response = raw_output
 
     return run

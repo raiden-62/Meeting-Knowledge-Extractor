@@ -35,6 +35,25 @@ class Project(Base):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    memory: Mapped["ProjectMemory | None"] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+
+
+class ProjectMemory(Base):
+    __tablename__ = "project_memory"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), unique=True, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    project: Mapped[Project] = relationship(back_populates="memory")
 
 
 class Transcript(Base):

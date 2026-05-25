@@ -2,7 +2,7 @@ import json
 import re
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import Any, TypedDict
 
 from app.core.config import (
     DEEPSEEK_MODEL,
@@ -11,10 +11,44 @@ from app.core.config import (
     LLM_PROVIDER,
     LLM_PROVIDERS,
     LLM_TRANSCRIPT_CONTEXT_CHARS,
+    LLM_USE_LANGGRAPH,
     MAX_TRANSCRIPT_CHARS,
 )
 from app.core.logger import logger
 from app.integrations.llm_api import deepseek_request, gigachat_request
+
+try:
+    from langchain_core.output_parsers import JsonOutputParser
+    from langchain_core.prompts import PromptTemplate
+    from langchain_core.runnables import RunnableLambda
+    from langgraph.graph import END, START, StateGraph
+except ImportError:
+    JsonOutputParser = None
+    PromptTemplate = None
+    RunnableLambda = None
+    END = None
+    START = None
+    StateGraph = None
+
+
+class LLMProviderError(RuntimeError):
+    def __init__(self, provider: str, reason: str):
+        self.provider = provider
+        self.reason = reason
+        super().__init__(f"LLM provider '{provider}' failed: {reason}")
+
+
+class ExtractionGraphState(TypedDict, total=False):
+    transcript: str
+    prompt_transcript: str
+    memory_context: str | None
+    provider: str
+    compression_notes: list[str]
+    prompt: str
+    llm_result: dict[str, str]
+    parsed: dict[str, Any]
+    output: dict[str, Any]
+
 
 INJECTION_PATTERNS = [
     r"ignore\s+(all|previous)\s+instructions",
@@ -622,7 +656,6 @@ def build_prompt(transcript: str, memory_context: str | None = None) -> str:
 - TaskAgent извлекает новые задачи с ответственными, статусами и приоритетами.
 - LifecycleAgent обновляет уже известные задачи, если в стенограмме сказано, что они сделаны, начаты или закрыты.
 - RiskAgent извлекает риски, блокеры и зависимости.
-- DeadlineAgent извлекает сроки задач и нормализует их в due_date.
 
 Память проекта:
 {project_memory}
@@ -630,7 +663,7 @@ def build_prompt(transcript: str, memory_context: str | None = None) -> str:
 Извлеки:
 1. Краткое резюме встречи.
 2. Принятые решения.
-3. Новые задачи с ответственными, статусом todo/in_progress/done, приоритетом low/medium/high и сроком, если он явно указан.
+3. Новые задачи с ответственными, статусом todo/in_progress/done и приоритетом low/medium/high.
 4. Людей и их задачи.
 5. Обновления существующих задач из памяти проекта.
 6. Риски, блокеры и зависимости.
@@ -643,18 +676,17 @@ def build_prompt(transcript: str, memory_context: str | None = None) -> str:
 - Если задача начата или находится в работе, добавь ее в task_updates со status "in_progress".
 - Если задача уже есть в памяти проекта, не дублируй ее в tasks, а обнови через task_updates.
 - Если видишь номер задачи из памяти проекта, обязательно верни task_id.
-- Для сроков используй поле due_date в формате YYYY-MM-DD. Если срок относительный или неясный, оставь due_date null и кратко поясни в agent_notes.
-- Если в стенограмме обновили срок существующей задачи, верни этот срок в task_updates.due_date.
+- Сроки задач не извлекай: интерфейс проекта сейчас использует дату поручения, статус и важность.
 
 Верни только JSON по схеме:
 {{
   "summary": "...",
   "decisions": ["..."],
   "tasks": [
-    {{"description": "...", "assignee": "...", "status": "todo", "priority": "medium", "due_date": null}}
+    {{"description": "...", "assignee": "...", "status": "todo", "priority": "medium"}}
   ],
   "task_updates": [
-    {{"task_id": 1, "description": "...", "assignee": "...", "status": "done", "due_date": "2026-05-30", "reason": "в стенограмме сказано, что задача готова"}}
+    {{"task_id": 1, "description": "...", "assignee": "...", "status": "done", "reason": "в стенограмме сказано, что задача готова"}}
   ],
   "people": {{"Имя": ["задача"]}},
   "risks": ["..."],
@@ -747,6 +779,116 @@ def _default_model_for_provider(provider: str) -> str:
     return GIGACHAT_MODEL
 
 
+def _langgraph_available() -> bool:
+    return all(
+        item is not None
+        for item in (JsonOutputParser, PromptTemplate, RunnableLambda, StateGraph, START, END)
+    )
+
+
+def _parse_json_with_langchain(answer: str) -> dict[str, Any]:
+    if JsonOutputParser is not None:
+        try:
+            parsed = JsonOutputParser().invoke(answer)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+
+    parsed = parse_json_response(answer)
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM response is not valid JSON")
+    return parsed
+
+
+def _manual_llm_extraction(
+    transcript: str,
+    provider: str,
+    memory_context: str | None,
+    prompt_transcript: str,
+    compression_notes: list[str],
+) -> dict[str, Any]:
+    result = _request_llm(build_prompt(prompt_transcript, memory_context), provider)
+    parsed = parse_json_response(result.get("answer", ""))
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM response is not valid JSON")
+
+    normalized = normalize_response(
+        parsed,
+        transcript=transcript,
+        source=provider,
+        model_name=result.get("model_name") or _default_model_for_provider(provider),
+    )
+    normalized["agent_notes"] = compression_notes + normalized.get("agent_notes", [])
+    normalized.setdefault("metrics", {})["llm_transcript_chars"] = len(prompt_transcript)
+    return normalized
+
+
+def _langgraph_llm_extraction(
+    transcript: str,
+    provider: str,
+    memory_context: str | None,
+    prompt_transcript: str,
+    compression_notes: list[str],
+) -> dict[str, Any]:
+    if not _langgraph_available():
+        return _manual_llm_extraction(
+            transcript,
+            provider,
+            memory_context,
+            prompt_transcript,
+            compression_notes,
+        )
+
+    def build_prompt_node(state: ExtractionGraphState) -> ExtractionGraphState:
+        prompt_value = PromptTemplate.from_template("{content}").invoke(
+            {"content": build_prompt(state["prompt_transcript"], state.get("memory_context"))}
+        )
+        return {"prompt": prompt_value.to_string()}
+
+    def call_model_node(state: ExtractionGraphState) -> ExtractionGraphState:
+        llm_call = RunnableLambda(lambda item: _request_llm(item["prompt"], item["provider"]))
+        return {"llm_result": llm_call.invoke(state)}
+
+    def parse_output_node(state: ExtractionGraphState) -> ExtractionGraphState:
+        return {"parsed": _parse_json_with_langchain(state["llm_result"].get("answer", ""))}
+
+    def normalize_node(state: ExtractionGraphState) -> ExtractionGraphState:
+        normalized = normalize_response(
+            state["parsed"],
+            transcript=state["transcript"],
+            source=state["provider"],
+            model_name=state["llm_result"].get("model_name")
+            or _default_model_for_provider(state["provider"]),
+        )
+        normalized["agent_notes"] = state["compression_notes"] + normalized.get("agent_notes", [])
+        normalized.setdefault("metrics", {})["llm_transcript_chars"] = len(state["prompt_transcript"])
+        normalized["agent_notes"].append("LangGraph: LLM pipeline выполнен через граф prompt -> model -> parse -> normalize.")
+        return {"output": normalized}
+
+    graph = StateGraph(ExtractionGraphState)
+    graph.add_node("build_prompt", build_prompt_node)
+    graph.add_node("call_model", call_model_node)
+    graph.add_node("parse_output", parse_output_node)
+    graph.add_node("normalize", normalize_node)
+    graph.add_edge(START, "build_prompt")
+    graph.add_edge("build_prompt", "call_model")
+    graph.add_edge("call_model", "parse_output")
+    graph.add_edge("parse_output", "normalize")
+    graph.add_edge("normalize", END)
+
+    result = graph.compile().invoke(
+        {
+            "transcript": transcript,
+            "prompt_transcript": prompt_transcript,
+            "memory_context": memory_context,
+            "provider": provider,
+            "compression_notes": compression_notes,
+        }
+    )
+    return result["output"]
+
+
 def extract_output(
     raw_data: str,
     provider: str | None = None,
@@ -754,33 +896,32 @@ def extract_output(
 ) -> dict[str, Any]:
     transcript = sanitize_transcript(raw_data)
     if not transcript:
-        return fallback_extract("")
+        raise ValueError("Transcript content is empty after sanitization")
 
     selected_provider = normalize_provider(provider)
     prompt_transcript, compression_notes = build_economical_transcript(transcript, memory_context)
 
+    logger.info("Sending request to %s", selected_provider)
     try:
-        logger.info("Sending request to %s", selected_provider)
-        result = _request_llm(build_prompt(prompt_transcript, memory_context), selected_provider)
-        logger.info("Received response from %s", selected_provider)
-
-        parsed = parse_json_response(result.get("answer", ""))
-        if not isinstance(parsed, dict):
-            raise ValueError("LLM response is not valid JSON")
-
-        normalized = normalize_response(
-            parsed,
-            transcript=transcript,
-            source=selected_provider,
-            model_name=result.get("model_name") or _default_model_for_provider(selected_provider),
-        )
-        normalized["agent_notes"] = compression_notes + normalized.get("agent_notes", [])
-        normalized.setdefault("metrics", {})["llm_transcript_chars"] = len(prompt_transcript)
-        return normalized
+        if LLM_USE_LANGGRAPH:
+            normalized = _langgraph_llm_extraction(
+                transcript,
+                selected_provider,
+                memory_context,
+                prompt_transcript,
+                compression_notes,
+            )
+        else:
+            normalized = _manual_llm_extraction(
+                transcript,
+                selected_provider,
+                memory_context,
+                prompt_transcript,
+                compression_notes,
+            )
     except Exception as exc:
-        logger.warning("Using fallback extractor: %s", exc)
-        fallback = fallback_extract(transcript)
-        fallback["requested_provider"] = selected_provider
-        fallback["agent_notes"] = compression_notes + fallback.get("agent_notes", [])
-        fallback.setdefault("metrics", {})["llm_transcript_chars"] = len(prompt_transcript)
-        return fallback
+        logger.warning("LLM provider request failed: %s", exc)
+        raise LLMProviderError(selected_provider, str(exc)) from exc
+
+    logger.info("Received response from %s", selected_provider)
+    return normalized

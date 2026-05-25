@@ -19,6 +19,7 @@ from app.schemas.schemas import (
     TranscriptRead,
 )
 from app.services.extraction_service import run_extraction
+from app.services.llm_service import LLMProviderError
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -132,7 +133,13 @@ def extract_for_transcript(
     if not transcript:
         raise HTTPException(status_code=404, detail="Transcript not found")
 
-    run = run_extraction(db, transcript, provider=validate_provider(provider))
+    try:
+        run = run_extraction(db, transcript, provider=validate_provider(provider))
+    except LLMProviderError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"provider": exc.provider, "reason": exc.reason},
+        ) from exc
     db.commit()
     db.refresh(run)
     return run
