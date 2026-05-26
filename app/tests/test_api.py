@@ -206,6 +206,88 @@ def test_normalize_response_adds_business_shape():
     assert normalized["tasks"][0]["description"] == "сделать демо"
     assert normalized["people"] == {"Анна": ["сделать демо"]}
     assert normalized["metrics"]["tasks_count"] == 1
+    assert normalized["confidence"]["tasks"][0]["level"] in {"high", "medium"}
+
+
+def test_confidence_marks_missing_assignee_as_low():
+    normalized = llm_service.normalize_response(
+        {"tasks": [{"description": "Проверить договор", "status": "todo"}]},
+        transcript="Проверить договор.",
+        source="test",
+        model_name="mock",
+    )
+
+    confidence = normalized["confidence"]["tasks"][0]
+    assert confidence["level"] == "low"
+    assert "ответственный не найден" in confidence["flags"]
+    assert normalized["metrics"]["low_confidence_count"] == 1
+
+
+def test_long_transcript_uses_parallel_chunks(monkeypatch):
+    calls = []
+
+    def fake_deepseek_request(prompt):
+        calls.append(prompt)
+        if "MergeAgent" in prompt:
+            return {
+                "answer": json.dumps(
+                    {
+                        "summary": "merged",
+                        "decisions": [],
+                        "tasks": [
+                            {
+                                "description": "merged task",
+                                "assignee": "Bob",
+                                "status": "todo",
+                                "priority": "medium",
+                                "confidence_score": 0.9,
+                            }
+                        ],
+                        "people": {"Bob": ["merged task"]},
+                        "risks": [],
+                    }
+                ),
+                "model_name": "deepseek-v4-flash",
+            }
+        return {
+            "answer": json.dumps(
+                {
+                    "summary": "chunk",
+                    "decisions": [],
+                    "tasks": [
+                        {
+                            "description": "chunk task",
+                            "assignee": "Bob",
+                            "status": "todo",
+                            "priority": "medium",
+                            "confidence_score": 0.85,
+                        }
+                    ],
+                    "people": {"Bob": ["chunk task"]},
+                    "risks": [],
+                }
+            ),
+            "model_name": "deepseek-v4-flash",
+        }
+
+    monkeypatch.setattr(llm_service, "LLM_LONG_TRANSCRIPT_CHARS", 1000)
+    monkeypatch.setattr(llm_service, "LLM_PARALLEL_LONG_TRANSCRIPTS", True)
+    monkeypatch.setattr(llm_service, "LLM_PARALLEL_LLM_MERGE", False)
+    monkeypatch.setattr(llm_service, "LLM_CHUNK_CHARS", 700)
+    monkeypatch.setattr(llm_service, "LLM_CHUNK_OVERLAP_CHARS", 50)
+    monkeypatch.setattr(llm_service, "LLM_CHUNK_MAX_WORKERS", 3)
+    monkeypatch.setattr(llm_service, "deepseek_request", fake_deepseek_request)
+
+    result = llm_service.extract_output(
+        "Bob will update roadmap. General discussion. " * 80,
+        provider="deepseek",
+    )
+
+    assert len(calls) >= 2
+    assert not any("MergeAgent" in prompt for prompt in calls)
+    assert result["tasks"][0]["description"] == "chunk task"
+    assert result["metrics"]["parallel_chunks_count"] >= 2
+    assert "ParallelAgent" in " ".join(result["agent_notes"])
 
 
 def test_long_transcript_is_compressed_for_llm():
@@ -354,6 +436,97 @@ def test_project_extraction_applies_api_task_update(monkeypatch):
     delete_response = client.delete(f"/api/projects/{project_id}/tasks/{task_id}")
     assert delete_response.status_code == 200
     assert client.get(f"/api/projects/{project_id}/tasks").json() == []
+
+
+def test_web_extraction_applies_results_immediately(monkeypatch):
+    monkeypatch.setattr(
+        extraction_service,
+        "process_meeting",
+        lambda transcript, **kwargs: sample_response(),
+    )
+
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Review Queue Demo", "description": "Client confirmation"},
+    )
+    project_id = project_response.json()["id"]
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={"transcript_text": "Bob will update roadmap."},
+    )
+    transcript_id = transcript_response.json()["id"]
+
+    extract_response = client.post(
+        f"/projects/{project_id}/extract",
+        data={"transcript_id": transcript_id, "provider": "deepseek"},
+        follow_redirects=False,
+    )
+
+    assert extract_response.status_code == 303
+    tasks = client.get(f"/api/projects/{project_id}/tasks").json()
+    assert {task["description"] for task in tasks} == {
+        "подготовить презентацию",
+        "update roadmap",
+    }
+
+    detail_page = client.get(f"/projects/{project_id}")
+    assert detail_page.status_code == 200
+    assert "Очередь AI-предложений" not in detail_page.text
+
+
+def test_project_upload_accepts_md_and_rejects_other_files():
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Upload Formats", "description": "txt md only"},
+    )
+    project_id = project_response.json()["id"]
+
+    md_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        files={"file": ("meeting.md", b"# Meeting\nAnna will prepare report.", "text/markdown")},
+    )
+    assert md_response.status_code == 200
+
+    bad_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        files={"file": ("meeting.pdf", b"%PDF", "application/pdf")},
+    )
+    assert bad_response.status_code == 400
+    assert bad_response.json()["detail"] == "Only .txt and .md transcripts are supported"
+
+
+def test_project_export_and_search(monkeypatch):
+    monkeypatch.setattr(
+        extraction_service,
+        "process_meeting",
+        lambda transcript, **kwargs: sample_response(),
+    )
+
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Export Demo", "description": "Report workspace"},
+    )
+    project_id = project_response.json()["id"]
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={"transcript_text": "Bob will update roadmap."},
+    )
+    transcript_id = transcript_response.json()["id"]
+    client.post(
+        f"/api/projects/{project_id}/extract",
+        data={"transcript_id": transcript_id},
+    )
+
+    export_response = client.get(f"/projects/{project_id}/export.md")
+    assert export_response.status_code == 200
+    assert export_response.headers["content-type"].startswith("text/markdown")
+    assert "# Export Demo" in export_response.text
+    assert "update roadmap" in export_response.text
+
+    search_response = client.get(f"/projects/{project_id}?q=roadmap")
+    assert search_response.status_code == 200
+    assert "Стенограммы" in search_response.text
+    assert "roadmap" in search_response.text
 
 
 def test_ui_pages_render():

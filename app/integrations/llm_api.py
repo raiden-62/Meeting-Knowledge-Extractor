@@ -1,4 +1,5 @@
 import time
+from threading import local
 
 import requests
 from gigachat import GigaChat
@@ -17,7 +18,7 @@ from app.core.config import (
 from app.core.logger import logger
 
 _gigachat_client: GigaChat | None = None
-_deepseek_session: requests.Session | None = None
+_deepseek_local = local()
 
 
 def get_gigachat_client() -> GigaChat:
@@ -38,12 +39,12 @@ def get_gigachat_client() -> GigaChat:
 
 
 def get_deepseek_session() -> requests.Session:
-    global _deepseek_session
+    session = getattr(_deepseek_local, "session", None)
+    if session is None:
+        session = requests.Session()
+        _deepseek_local.session = session
 
-    if _deepseek_session is None:
-        _deepseek_session = requests.Session()
-
-    return _deepseek_session
+    return session
 
 
 def gigachat_request(

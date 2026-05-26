@@ -4,6 +4,7 @@
 {% set risks = latest_output.get("risks", []) if latest_output else [] %}
 {% set task_updates = latest_output.get("task_updates", []) if latest_output else [] %}
 {% set agent_notes = latest_output.get("agent_notes", []) if latest_output else [] %}
+{% set confidence = latest_output.get("confidence", {}) if latest_output else {} %}
 
 <section class="project-header">
     <div>
@@ -11,7 +12,11 @@
         <h1>{{ project.name }}</h1>
         <p class="lead">{{ project.description or "Без описания" }}</p>
     </div>
-    <a class="ghost-link" href="/projects">Назад к проектам</a>
+    <div class="header-actions">
+        <a class="ghost-link" href="/projects/{{ project.id }}/export.md">Экспорт MD</a>
+        <a class="ghost-link" href="/projects/{{ project.id }}/export.txt">Экспорт TXT</a>
+        <a class="ghost-link" href="/projects">Назад к проектам</a>
+    </div>
 </section>
 
 <section class="stats-grid" aria-label="Сводка проекта">
@@ -37,13 +42,49 @@
     </div>
 </section>
 
+<section class="panel">
+    <form class="search-bar" method="get" action="/projects/{{ project.id }}">
+        <input type="search" name="q" value="{{ filters.q }}" placeholder="Поиск по задачам, решениям, людям и стенограммам">
+        <button type="submit" class="primary">Найти</button>
+        <a class="ghost-link" href="/projects/{{ project.id }}">Сбросить</a>
+    </form>
+    {% if search.query %}
+    <div class="search-results">
+        <div>
+            <h3>Задачи</h3>
+            {% for item in search.tasks %}
+            <p><strong>#{{ item.id }}</strong> {{ item.title }} <span class="meta">{{ item.meta }}</span></p>
+            {% else %}<p class="muted">Ничего не найдено.</p>{% endfor %}
+        </div>
+        <div>
+            <h3>Решения</h3>
+            {% for item in search.decisions %}
+            <p><strong>#{{ item.id }}</strong> {{ item.title }} <span class="meta">{{ item.meta }}</span></p>
+            {% else %}<p class="muted">Ничего не найдено.</p>{% endfor %}
+        </div>
+        <div>
+            <h3>Стенограммы</h3>
+            {% for item in search.transcripts %}
+            <p><strong>#{{ item.id }}</strong> {{ item.title }} <span class="meta">{{ item.meta }}</span><br><span class="muted">{{ item.snippet }}</span></p>
+            {% else %}<p class="muted">Ничего не найдено.</p>{% endfor %}
+        </div>
+        <div>
+            <h3>Люди</h3>
+            {% for item in search.people %}
+            <p><strong>#{{ item.id }}</strong> {{ item.title }} <span class="meta">{{ item.meta }}</span></p>
+            {% else %}<p class="muted">Ничего не найдено.</p>{% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</section>
+
 <section class="layout-two">
     <div class="panel">
         <h2>Загрузка стенограммы</h2>
         <form action="/projects/{{ project.id }}/transcripts" method="post" enctype="multipart/form-data">
             <label>
-                TXT-файл
-                <input type="file" name="file" accept=".txt,text/plain">
+                TXT/MD-файл
+                <input type="file" name="file" accept=".txt,.md,text/plain,text/markdown">
             </label>
             <label>
                 Или вставьте текст
@@ -85,8 +126,54 @@
                 <span>{{ metrics.get("decisions_count", 0) }} решений</span>
                 <span>{{ metrics.get("risks_count", 0) }} рисков</span>
                 <span>{{ metrics.get("task_updates_count", 0) }} обновлений</span>
+                <span>{{ metrics.get("low_confidence_count", 0) }} спорных</span>
+                {% if metrics.get("parallel_chunks_count", 0) %}
+                <span>{{ metrics.get("parallel_chunks_count", 0) }} чанков</span>
+                {% endif %}
             </div>
         </div>
+    </div>
+</section>
+
+<section class="panel">
+    <div class="section-head">
+        <div>
+            <h2>Контроль качества AI</h2>
+            <p class="muted">Сомнительные задачи, статусы, решения, риски и ответственные из последнего анализа.</p>
+        </div>
+    </div>
+    <div class="confidence-list">
+        {% for item in confidence.get("tasks", []) if item.get("level") != "high" %}
+        <div class="confidence-row {{ item.get("level", "medium") }}">
+            <strong>Задача · {{ item.get("level", "medium") }}</strong>
+            <span>{{ item.get("description", "") }}</span>
+            <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
+        </div>
+        {% endfor %}
+        {% for item in confidence.get("task_updates", []) if item.get("level") != "high" %}
+        <div class="confidence-row {{ item.get("level", "medium") }}">
+            <strong>Статус · {{ item.get("level", "medium") }}</strong>
+            <span>{{ item.get("description", "") }}</span>
+            <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
+        </div>
+        {% endfor %}
+        {% for item in confidence.get("decisions", []) if item.get("level") != "high" %}
+        <div class="confidence-row {{ item.get("level", "medium") }}">
+            <strong>Решение · {{ item.get("level", "medium") }}</strong>
+            <span>{{ item.get("description", "") }}</span>
+            <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
+        </div>
+        {% endfor %}
+        {% for item in confidence.get("risks", []) if item.get("level") != "high" %}
+        <div class="confidence-row {{ item.get("level", "medium") }}">
+            <strong>Риск · {{ item.get("level", "medium") }}</strong>
+            <span>{{ item.get("description", "") }}</span>
+            <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
+        </div>
+        {% endfor %}
+        {% if not metrics.get("low_confidence_count", 0) %}
+        <div class="empty">Спорных мест в последнем анализе нет.</div>
+        {% endif %}
     </div>
 </section>
 

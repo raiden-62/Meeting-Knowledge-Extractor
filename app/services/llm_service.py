@@ -1,5 +1,6 @@
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 from datetime import datetime
 from typing import Any, TypedDict
@@ -8,6 +9,11 @@ from app.core.config import (
     DEEPSEEK_MODEL,
     GIGACHAT_MODEL,
     LLM_LONG_TRANSCRIPT_CHARS,
+    LLM_CHUNK_CHARS,
+    LLM_CHUNK_MAX_WORKERS,
+    LLM_CHUNK_OVERLAP_CHARS,
+    LLM_PARALLEL_LLM_MERGE,
+    LLM_PARALLEL_LONG_TRANSCRIPTS,
     LLM_PROVIDER,
     LLM_PROVIDERS,
     LLM_TRANSCRIPT_CONTEXT_CHARS,
@@ -184,6 +190,7 @@ MONTHS_RU = {
 
 ALLOWED_PRIORITIES = {"low", "medium", "high"}
 ALLOWED_STATUSES = {"todo", "in_progress", "done"}
+CONFIDENCE_LEVELS = {"high", "medium", "low"}
 
 
 def sanitize_transcript(text: str) -> str:
@@ -360,6 +367,176 @@ def _normalize_task_update(item: Any) -> dict[str, str | int | None] | None:
     }
 
 
+def _confidence_level(score: float | None = None, value: Any = None) -> str:
+    text = _clean_text(value).lower()
+    if text in CONFIDENCE_LEVELS:
+        return text
+    if score is None:
+        return "medium"
+    if score >= 0.8:
+        return "high"
+    if score >= 0.55:
+        return "medium"
+    return "low"
+
+
+def _confidence_score(item: Any) -> float | None:
+    if not isinstance(item, dict):
+        return None
+    value = item.get("confidence_score") or item.get("score")
+    if value is None and isinstance(item.get("confidence"), (int, float)):
+        value = item.get("confidence")
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if score > 1:
+        score = score / 100
+    return max(0.0, min(score, 1.0))
+
+
+def _confidence_text(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    value = item.get("confidence")
+    return value if isinstance(value, str) else ""
+
+
+def _confidence_reason(item: Any) -> str | None:
+    if not isinstance(item, dict):
+        return None
+    reason = _clean_text(item.get("confidence_reason") or item.get("reason") or item.get("evidence"))
+    return reason or None
+
+
+def _task_confidence(item: Any, task: dict[str, str | None], index: int) -> dict[str, Any]:
+    score = _confidence_score(item)
+    flags: list[str] = []
+    if not task.get("assignee"):
+        flags.append("ответственный не найден")
+    if isinstance(item, dict) and not item.get("status"):
+        flags.append("статус выставлен по умолчанию")
+    if isinstance(item, dict) and _clean_text(item.get("kind")).lower() in {"possible", "candidate"}:
+        flags.append("возможно задача")
+
+    level = _confidence_level(score, _confidence_text(item))
+    if flags and level == "high":
+        level = "medium"
+    if "ответственный не найден" in flags and level == "medium":
+        level = "low"
+    if level != "high" and "возможно задача" not in flags:
+        flags.append("возможно задача")
+    if level == "high" and not flags:
+        flags.append("задача точно найдена")
+
+    return {
+        "kind": "task",
+        "index": index,
+        "description": task.get("description") or "",
+        "level": level,
+        "score": score,
+        "flags": _unique_strings(flags),
+        "reason": _confidence_reason(item),
+    }
+
+
+def _task_update_confidence(item: Any, update: dict[str, str | int | None], index: int) -> dict[str, Any]:
+    score = _confidence_score(item)
+    flags: list[str] = []
+    if not update.get("task_id"):
+        flags.append("связь с задачей неясна")
+    if not update.get("assignee"):
+        flags.append("ответственный не найден")
+    if not update.get("status"):
+        flags.append("статус неясен")
+
+    level = _confidence_level(score, _confidence_text(item))
+    if flags and level == "high":
+        level = "medium"
+    if len(flags) >= 2:
+        level = "low"
+
+    return {
+        "kind": "task_update",
+        "index": index,
+        "description": update.get("description") or "",
+        "level": level,
+        "score": score,
+        "flags": _unique_strings(flags or ["обновление статуса уверенное"]),
+        "reason": _confidence_reason(item),
+    }
+
+
+def _text_confidence(item: Any, kind: str, index: int) -> dict[str, Any]:
+    score = _confidence_score(item)
+    description = _clean_text(item.get("description") if isinstance(item, dict) else item)
+    level = _confidence_level(score, _confidence_text(item))
+    return {
+        "kind": kind,
+        "index": index,
+        "description": description,
+        "level": level,
+        "score": score,
+        "flags": ["уверенно найдено"] if level == "high" else ["требует внимания"],
+        "reason": _confidence_reason(item),
+    }
+
+
+def _normalize_confidence(
+    parsed: dict[str, Any],
+    raw_tasks: list[Any],
+    tasks: list[dict[str, str | None]],
+    raw_task_updates: list[Any],
+    task_updates: list[dict[str, str | int | None]],
+) -> dict[str, list[dict[str, Any]]]:
+    incoming = parsed.get("confidence", {})
+    result: dict[str, list[dict[str, Any]]] = {
+        "tasks": [],
+        "task_updates": [],
+        "decisions": [],
+        "risks": [],
+    }
+    if isinstance(incoming, dict):
+        for key in result:
+            items = incoming.get(key, [])
+            if isinstance(items, list):
+                for index, item in enumerate(items):
+                    if isinstance(item, dict):
+                        normalized = {
+                            "kind": _clean_text(item.get("kind") or key.rstrip("s")),
+                            "index": _parse_optional_int(item.get("index")) or index,
+                            "description": _clean_text(item.get("description")),
+                            "level": _confidence_level(_confidence_score(item), _confidence_text(item)),
+                            "score": _confidence_score(item),
+                            "flags": _unique_strings(item.get("flags", []) if isinstance(item.get("flags"), list) else []),
+                            "reason": _confidence_reason(item),
+                        }
+                        result[key].append(normalized)
+
+    if not result["tasks"]:
+        result["tasks"] = [
+            _task_confidence(raw_tasks[index] if index < len(raw_tasks) else {}, task, index)
+            for index, task in enumerate(tasks)
+        ]
+    if not result["task_updates"]:
+        result["task_updates"] = [
+            _task_update_confidence(
+                raw_task_updates[index] if index < len(raw_task_updates) else {},
+                update,
+                index,
+            )
+            for index, update in enumerate(task_updates)
+        ]
+    if not result["decisions"]:
+        decisions = parsed.get("decisions", [])
+        result["decisions"] = [_text_confidence(item, "decision", index) for index, item in enumerate(decisions if isinstance(decisions, list) else [])]
+    if not result["risks"]:
+        risks = parsed.get("risks", [])
+        result["risks"] = [_text_confidence(item, "risk", index) for index, item in enumerate(risks if isinstance(risks, list) else [])]
+
+    return result
+
+
 def _normalize_agent_notes(items: Any) -> list[str]:
     if isinstance(items, str):
         items = [items]
@@ -453,6 +630,8 @@ def normalize_response(
     if isinstance(raw_tasks, list):
         tasks = [_normalize_task(item) for item in raw_tasks]
         tasks = [task for task in tasks if task["description"]]
+    else:
+        raw_tasks = []
 
     if not tasks and people:
         tasks = _tasks_from_people(people)
@@ -483,9 +662,24 @@ def normalize_response(
             normalized_update = _normalize_task_update(item)
             if normalized_update:
                 task_updates.append(normalized_update)
+    else:
+        raw_task_updates = []
 
     agent_notes = _normalize_agent_notes(parsed.get("agent_notes", []))
+    confidence = _normalize_confidence(
+        parsed,
+        raw_tasks,
+        tasks,
+        raw_task_updates,
+        task_updates,
+    )
     metrics["task_updates_count"] = len(task_updates)
+    metrics["low_confidence_count"] = sum(
+        1
+        for key in ("tasks", "task_updates", "decisions", "risks")
+        for item in confidence.get(key, [])
+        if item.get("level") in {"low", "medium"}
+    )
 
     return {
         "summary": summary,
@@ -494,6 +688,7 @@ def normalize_response(
         "task_updates": task_updates,
         "people": people,
         "risks": risks,
+        "confidence": confidence,
         "metrics": metrics,
         "agent_notes": agent_notes,
         "source": source,
@@ -690,6 +885,16 @@ def build_prompt(transcript: str, memory_context: str | None = None) -> str:
   ],
   "people": {{"Имя": ["задача"]}},
   "risks": ["..."],
+  "confidence": {{
+    "tasks": [
+      {{"index": 0, "description": "...", "level": "high", "score": 0.92, "flags": ["задача точно найдена"], "reason": "..."}}
+    ],
+    "task_updates": [
+      {{"index": 0, "description": "...", "level": "medium", "score": 0.7, "flags": ["статус неясен"], "reason": "..."}}
+    ],
+    "decisions": [],
+    "risks": []
+  }},
   "agent_notes": ["ContextAgent: ...", "LifecycleAgent: ..."],
   "metrics": {{
     "transcript_chars": 0,
@@ -801,6 +1006,206 @@ def _parse_json_with_langchain(answer: str) -> dict[str, Any]:
     return parsed
 
 
+def split_transcript_for_parallel(
+    transcript: str,
+    max_chars: int | None = None,
+    overlap_chars: int | None = None,
+) -> list[str]:
+    if max_chars is None:
+        max_chars = LLM_CHUNK_CHARS
+    if overlap_chars is None:
+        overlap_chars = LLM_CHUNK_OVERLAP_CHARS
+    max_chars = max(2500, max_chars)
+    overlap_chars = max(0, min(overlap_chars, max_chars // 3))
+    segments = _split_segments(transcript)
+    if not segments:
+        return [transcript[i : i + max_chars] for i in range(0, len(transcript), max_chars)]
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for segment in segments:
+        if len(segment) > max_chars:
+            if current:
+                chunks.append("\n".join(current))
+                current = []
+                current_len = 0
+            for start in range(0, len(segment), max_chars):
+                chunks.append(segment[start : start + max_chars])
+            continue
+
+        extra = len(segment) + 1
+        if current and current_len + extra > max_chars:
+            chunk = "\n".join(current)
+            chunks.append(chunk)
+            overlap = chunk[-overlap_chars:] if overlap_chars else ""
+            current = [f"[overlap]\n{overlap}", segment] if overlap else [segment]
+            current_len = sum(len(item) + 1 for item in current)
+        else:
+            current.append(segment)
+            current_len += extra
+
+    if current:
+        chunks.append("\n".join(current))
+    return [chunk for chunk in chunks if chunk.strip()]
+
+
+def _build_chunk_prompt(
+    chunk: str,
+    index: int,
+    total: int,
+    memory_context: str | None,
+) -> str:
+    header = (
+        f"ChunkAgent: analyze transcript chunk {index + 1}/{total}. "
+        "Extract only facts present in this chunk. Include confidence for uncertain tasks, missing assignees, and unclear statuses.\n\n"
+    )
+    return build_prompt(header + chunk, memory_context)
+
+
+def _build_merge_prompt(
+    transcript: str,
+    chunk_outputs: list[dict[str, Any]],
+    memory_context: str | None,
+) -> str:
+    payload = json.dumps(chunk_outputs, ensure_ascii=False, indent=2)
+    project_memory = memory_context or "Project memory is unavailable."
+    return f"""
+MergeAgent: combine partial meeting extraction JSON objects into one final JSON.
+Deduplicate repeated tasks, decisions, risks and people. Prefer higher-confidence items.
+If two chunks conflict, keep the more specific item and add a confidence flag explaining uncertainty.
+Return only the same JSON shape used by the extractor, including confidence.
+
+Project memory:
+{project_memory}
+
+Original transcript length: {len(transcript)} chars.
+
+Partial JSON results:
+{payload}
+""".strip()
+
+
+def _merge_without_llm(
+    transcript: str,
+    provider: str,
+    model_name: str | None,
+    chunk_outputs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    combined: dict[str, Any] = {
+        "summary": " ".join(_clean_text(item.get("summary")) for item in chunk_outputs if item.get("summary")),
+        "decisions": [],
+        "tasks": [],
+        "task_updates": [],
+        "people": {},
+        "risks": [],
+        "agent_notes": [],
+        "confidence": {"tasks": [], "task_updates": [], "decisions": [], "risks": []},
+        "metrics": {},
+    }
+    for output in chunk_outputs:
+        combined["decisions"].extend(output.get("decisions") or [])
+        combined["tasks"].extend(output.get("tasks") or [])
+        combined["task_updates"].extend(output.get("task_updates") or [])
+        combined["risks"].extend(output.get("risks") or [])
+        combined["agent_notes"].extend(output.get("agent_notes") or [])
+        for name, items in (output.get("people") or {}).items():
+            combined["people"].setdefault(name, [])
+            combined["people"][name].extend(items or [])
+        confidence = output.get("confidence") or {}
+        for key in combined["confidence"]:
+            combined["confidence"][key].extend(confidence.get(key) or [])
+
+    normalized = normalize_response(combined, transcript=transcript, source=provider, model_name=model_name)
+    normalized["agent_notes"] = _unique_strings(
+        ["MergeAgent: результаты чанков объединены локально после параллельной обработки."]
+        + normalized.get("agent_notes", [])
+    )
+    return normalized
+
+
+def _parallel_llm_extraction(
+    transcript: str,
+    provider: str,
+    memory_context: str | None,
+) -> dict[str, Any]:
+    chunks = split_transcript_for_parallel(transcript)
+    if len(chunks) <= 1:
+        return _manual_llm_extraction(transcript, provider, memory_context, transcript, [])
+
+    max_workers = max(1, min(LLM_CHUNK_MAX_WORKERS, len(chunks)))
+    chunk_outputs: list[dict[str, Any] | None] = [None] * len(chunks)
+    model_name: str | None = None
+
+    def analyze_chunk(index: int, chunk: str) -> tuple[int, dict[str, Any], str | None]:
+        result = _request_llm(_build_chunk_prompt(chunk, index, len(chunks), memory_context), provider)
+        parsed = parse_json_response(result.get("answer", ""))
+        if not isinstance(parsed, dict):
+            raise ValueError(f"LLM chunk {index + 1} response is not valid JSON")
+        normalized = normalize_response(
+            parsed,
+            transcript=chunk,
+            source=provider,
+            model_name=result.get("model_name") or _default_model_for_provider(provider),
+        )
+        normalized.setdefault("metrics", {})["chunk_index"] = index + 1
+        normalized.setdefault("metrics", {})["chunk_count"] = len(chunks)
+        return index, normalized, result.get("model_name")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(analyze_chunk, index, chunk): index
+            for index, chunk in enumerate(chunks)
+        }
+        for future in as_completed(futures):
+            index, normalized, chunk_model = future.result()
+            chunk_outputs[index] = normalized
+            model_name = model_name or chunk_model
+
+    complete_outputs = [output for output in chunk_outputs if output is not None]
+    merge_mode = "local"
+    if LLM_PARALLEL_LLM_MERGE:
+        merge_result = _request_llm(_build_merge_prompt(transcript, complete_outputs, memory_context), provider)
+        parsed_merge = parse_json_response(merge_result.get("answer", ""))
+        if isinstance(parsed_merge, dict):
+            merge_mode = "llm"
+            normalized = normalize_response(
+                parsed_merge,
+                transcript=transcript,
+                source=provider,
+                model_name=merge_result.get("model_name") or model_name or _default_model_for_provider(provider),
+            )
+        else:
+            normalized = _merge_without_llm(
+                transcript,
+                provider,
+                merge_result.get("model_name") or model_name or _default_model_for_provider(provider),
+                complete_outputs,
+            )
+    else:
+        normalized = _merge_without_llm(
+            transcript,
+            provider,
+            model_name or _default_model_for_provider(provider),
+            complete_outputs,
+        )
+
+    normalized["agent_notes"] = _unique_strings(
+        [
+            (
+                "ParallelAgent: длинная стенограмма обработана параллельно "
+                f"в {len(chunks)} чанках, merge={merge_mode}."
+            )
+        ]
+        + normalized.get("agent_notes", [])
+    )
+    metrics = normalized.setdefault("metrics", {})
+    metrics["parallel_chunks_count"] = len(chunks)
+    metrics["parallel_workers"] = max_workers
+    metrics["llm_transcript_chars"] = len(transcript)
+    return normalized
+
+
 def _manual_llm_extraction(
     transcript: str,
     provider: str,
@@ -899,26 +1304,36 @@ def extract_output(
         raise ValueError("Transcript content is empty after sanitization")
 
     selected_provider = normalize_provider(provider)
-    prompt_transcript, compression_notes = build_economical_transcript(transcript, memory_context)
 
     logger.info("Sending request to %s", selected_provider)
     try:
-        if LLM_USE_LANGGRAPH:
-            normalized = _langgraph_llm_extraction(
+        if LLM_PARALLEL_LONG_TRANSCRIPTS and len(transcript) > LLM_LONG_TRANSCRIPT_CHARS:
+            normalized = _parallel_llm_extraction(
                 transcript,
                 selected_provider,
                 memory_context,
-                prompt_transcript,
-                compression_notes,
             )
         else:
-            normalized = _manual_llm_extraction(
+            prompt_transcript, compression_notes = build_economical_transcript(
                 transcript,
-                selected_provider,
                 memory_context,
-                prompt_transcript,
-                compression_notes,
             )
+            if LLM_USE_LANGGRAPH:
+                normalized = _langgraph_llm_extraction(
+                    transcript,
+                    selected_provider,
+                    memory_context,
+                    prompt_transcript,
+                    compression_notes,
+                )
+            else:
+                normalized = _manual_llm_extraction(
+                    transcript,
+                    selected_provider,
+                    memory_context,
+                    prompt_transcript,
+                    compression_notes,
+                )
     except Exception as exc:
         logger.warning("LLM provider request failed: %s", exc)
         raise LLMProviderError(selected_provider, str(exc)) from exc

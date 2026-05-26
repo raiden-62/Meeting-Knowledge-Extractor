@@ -36,6 +36,12 @@ def validate_transcript_content(content: str) -> str:
     return cleaned
 
 
+def validate_transcript_file(file: UploadFile) -> None:
+    filename = (file.filename or "").lower()
+    if not filename.endswith((".txt", ".md")):
+        raise HTTPException(status_code=400, detail="Only .txt and .md transcripts are supported")
+
+
 def validate_provider(provider: str | None) -> str | None:
     if provider is None or not provider.strip():
         return None
@@ -83,6 +89,7 @@ def add_transcript(
     filename = None
 
     if file is not None:
+        validate_transcript_file(file)
         content = file.file.read().decode("utf-8", errors="ignore")
         filename = file.filename
 

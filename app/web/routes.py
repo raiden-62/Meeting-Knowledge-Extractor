@@ -1,7 +1,8 @@
 from datetime import datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -40,6 +41,12 @@ def validate_transcript_content(content: str) -> str:
     return cleaned
 
 
+def validate_transcript_file(file: UploadFile) -> None:
+    filename = (file.filename or "").lower()
+    if not filename.endswith((".txt", ".md")):
+        raise HTTPException(status_code=400, detail="Only .txt and .md transcripts are supported")
+
+
 def validate_provider(provider: str | None) -> str | None:
     if provider is None or not provider.strip():
         return None
@@ -48,6 +55,137 @@ def validate_provider(provider: str | None) -> str | None:
         allowed = ", ".join(LLM_PROVIDERS)
         raise HTTPException(status_code=400, detail=f"Provider must be one of: {allowed}")
     return cleaned
+
+
+def find_project_matches(project_id: int, query: str | None, db: Session) -> dict[str, list[dict]]:
+    cleaned = (query or "").strip()
+    if len(cleaned) < 2:
+        return {"query": cleaned, "tasks": [], "decisions": [], "transcripts": [], "people": []}
+
+    lowered = cleaned.casefold()
+
+    def hit(value: str | None) -> bool:
+        return lowered in (value or "").casefold()
+
+    tasks = [
+        {
+            "id": task.id,
+            "title": task.description,
+            "meta": f"{task.status} · {task.priority}",
+        }
+        for task in db.query(models.Task).filter(models.Task.project_id == project_id).all()
+        if hit(task.description) or hit(task.status) or hit(task.priority) or hit(task.assignee.name if task.assignee else "")
+    ]
+    decisions = [
+        {"id": decision.id, "title": decision.description, "meta": decision.created_at.strftime("%Y-%m-%d")}
+        for decision in db.query(models.Decision).filter(models.Decision.project_id == project_id).all()
+        if hit(decision.description)
+    ]
+    transcripts = [
+        {
+            "id": transcript.id,
+            "title": transcript.source_filename or f"Transcript #{transcript.id}",
+            "meta": transcript.created_at.strftime("%Y-%m-%d %H:%M"),
+            "snippet": _snippet(transcript.content, lowered),
+        }
+        for transcript in db.query(models.Transcript).filter(models.Transcript.project_id == project_id).all()
+        if hit(transcript.content) or hit(transcript.source_filename)
+    ]
+    people = [
+        {"id": person.id, "title": person.name, "meta": person.role or "Без роли"}
+        for person in db.query(models.Person).filter(models.Person.project_id == project_id).all()
+        if hit(person.name) or hit(person.role)
+    ]
+    return {
+        "query": cleaned,
+        "tasks": tasks[:20],
+        "decisions": decisions[:20],
+        "transcripts": transcripts[:10],
+        "people": people[:20],
+    }
+
+
+def _snippet(text: str, lowered_query: str, radius: int = 90) -> str:
+    lowered = text.casefold()
+    index = lowered.find(lowered_query)
+    if index == -1:
+        return text[: radius * 2].strip()
+    start = max(index - radius, 0)
+    end = min(index + len(lowered_query) + radius, len(text))
+    prefix = "..." if start else ""
+    suffix = "..." if end < len(text) else ""
+    return f"{prefix}{text[start:end].strip()}{suffix}"
+
+
+def build_project_report(project: models.Project, db: Session, markdown: bool = True) -> str:
+    tasks = (
+        db.query(models.Task)
+        .filter(models.Task.project_id == project.id)
+        .order_by(models.Task.status.asc(), models.Task.created_at.desc())
+        .all()
+    )
+    decisions = (
+        db.query(models.Decision)
+        .filter(models.Decision.project_id == project.id)
+        .order_by(models.Decision.created_at.desc())
+        .all()
+    )
+    runs = (
+        db.query(models.ExtractionRun)
+        .join(models.Transcript)
+        .filter(models.Transcript.project_id == project.id)
+        .order_by(models.ExtractionRun.created_at.desc())
+        .all()
+    )
+    latest_output = runs[0].raw_response if runs and runs[0].raw_response else {}
+    risks = latest_output.get("accepted_risks") or latest_output.get("risks") or []
+    summary = latest_output.get("summary") or "Сводка пока не сформирована."
+
+    if markdown:
+        lines = [
+            f"# {project.name}",
+            "",
+            project.description or "Без описания",
+            "",
+            "## Сводка",
+            summary,
+            "",
+            "## Задачи",
+        ]
+        lines.extend(
+            f"- [{task.status}] {task.description} ({task.assignee.name if task.assignee else 'без ответственного'}, {task.priority})"
+            for task in tasks
+        )
+        if not tasks:
+            lines.append("- Нет задач")
+        lines.extend(["", "## Решения"])
+        lines.extend(f"- {decision.description}" for decision in decisions)
+        if not decisions:
+            lines.append("- Нет решений")
+        lines.extend(["", "## Риски"])
+        lines.extend(f"- {risk}" for risk in risks)
+        if not risks:
+            lines.append("- Нет рисков")
+        return "\n".join(lines).strip() + "\n"
+
+    lines = [
+        project.name,
+        project.description or "Без описания",
+        "",
+        "Сводка:",
+        summary,
+        "",
+        "Задачи:",
+    ]
+    lines.extend(
+        f"- {task.status}: {task.description} ({task.assignee.name if task.assignee else 'без ответственного'}, {task.priority})"
+        for task in tasks
+    )
+    lines.extend(["", "Решения:"])
+    lines.extend(f"- {decision.description}" for decision in decisions)
+    lines.extend(["", "Риски:"])
+    lines.extend(f"- {risk}" for risk in risks)
+    return "\n".join(lines).strip() + "\n"
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -85,6 +223,7 @@ def project_detail(
     status: str | None = None,
     person_id: str | None = None,
     priority: str | None = None,
+    q: str | None = None,
     db: Session = Depends(get_db),
 ):
     project = db.query(models.Project).filter(models.Project.id == project_id).first()
@@ -153,11 +292,14 @@ def project_detail(
             "all_tasks": all_tasks,
             "decisions": decisions,
             "latest_output": latest_output,
+            "latest_run": latest_run,
+            "search": find_project_matches(project_id, q, db),
             "task_stats": task_stats,
             "filters": {
                 "status": status or "",
                 "person_id": selected_person_id or "",
                 "priority": priority or "",
+                "q": q or "",
             },
         },
     )
@@ -178,6 +320,7 @@ def upload_transcript(
     filename = None
 
     if file is not None:
+        validate_transcript_file(file)
         content = file.file.read().decode("utf-8", errors="ignore")
         filename = file.filename
 
@@ -228,6 +371,29 @@ def extract_transcript(
     db.commit()
 
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
+
+
+@router.get("/projects/{project_id}/export.{extension}")
+def export_project_report(
+    project_id: int,
+    extension: str,
+    db: Session = Depends(get_db),
+):
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if extension not in {"md", "txt"}:
+        raise HTTPException(status_code=404, detail="Export format not found")
+
+    markdown = extension == "md"
+    content = build_project_report(project, db, markdown=markdown)
+    media_type = "text/markdown; charset=utf-8" if markdown else "text/plain; charset=utf-8"
+    filename = quote(f"{project.name}-meeting-report.{extension}")
+    return PlainTextResponse(
+        content,
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 @router.post("/projects/{project_id}/people")

@@ -86,6 +86,14 @@ a {
     flex-wrap: wrap;
 }
 
+.header-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
 .site-nav a,
 .ghost-link {
     min-height: 36px;
@@ -324,7 +332,8 @@ button:disabled {
 
 .inline-form,
 .filters,
-.person-row {
+.person-row,
+.search-bar {
     display: grid;
     gap: 9px;
     margin-bottom: 12px;
@@ -337,6 +346,27 @@ button:disabled {
 .filters {
     grid-template-columns: repeat(3, minmax(150px, 1fr)) 124px 112px;
     align-items: center;
+}
+
+.search-bar {
+    grid-template-columns: minmax(240px, 1fr) 120px 112px;
+    align-items: center;
+}
+
+.search-results {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    gap: 12px;
+    padding-top: 4px;
+}
+
+.search-results h3 {
+    margin: 0 0 8px;
+    font-size: 14px;
+}
+
+.search-results p {
+    margin-bottom: 9px;
 }
 
 .task-workspace {
@@ -459,6 +489,43 @@ button:disabled {
     border: 1px solid var(--border);
 }
 
+.confidence-list {
+    display: grid;
+    gap: 8px;
+}
+
+.confidence-row {
+    display: grid;
+    grid-template-columns: 170px minmax(240px, 1fr) minmax(240px, 0.9fr);
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface-soft);
+}
+
+.confidence-row.medium {
+    border-left-color: #b38722;
+    background: #fffaf0;
+}
+
+.confidence-row.low {
+    border-left-color: var(--danger);
+    background: #fff6f6;
+}
+
+.confidence-row strong {
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.confidence-row small {
+    color: var(--muted);
+}
+
 .stack {
     padding-left: 18px;
     margin: 0;
@@ -499,9 +566,15 @@ button:disabled {
         grid-template-columns: 1fr 1fr;
     }
 
-    .filters {
+    .filters,
+    .search-results {
         grid-template-columns: 1fr 1fr;
     }
+
+    .confidence-row {
+        grid-template-columns: 1fr;
+    }
+
 }
 
 @media (max-width: 760px) {
@@ -532,6 +605,8 @@ button:disabled {
     .project-row,
     .inline-form,
     .filters,
+    .search-bar,
+    .search-results,
     .person-row,
     .run-row {
         grid-template-columns: 1fr;
