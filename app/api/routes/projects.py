@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.core.config import LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
 from app.db import models
 from app.db.database import get_db
 from app.schemas.schemas import (
@@ -20,46 +19,17 @@ from app.schemas.schemas import (
 )
 from app.services.extraction_service import run_extraction
 from app.services.llm_service import LLMProviderError
-from app.services.transcript_dates import parse_meeting_date, resolve_meeting_date
+from app.services.project_validation import (
+    clean_required_text,
+    read_transcript_upload,
+    validate_priority,
+    validate_provider,
+    validate_status,
+    validate_transcript_content,
+    parse_submitted_meeting_date,
+)
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
-
-
-def validate_transcript_content(content: str) -> str:
-    cleaned = content.strip()
-    if not cleaned:
-        raise HTTPException(status_code=400, detail="Transcript content is required")
-    if len(cleaned) > MAX_TRANSCRIPT_CHARS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Transcript must be no longer than {MAX_TRANSCRIPT_CHARS} chars",
-        )
-    return cleaned
-
-
-def validate_transcript_file(file: UploadFile) -> None:
-    filename = (file.filename or "").lower()
-    if not filename.endswith((".txt", ".md")):
-        raise HTTPException(status_code=400, detail="Only .txt and .md transcripts are supported")
-
-
-def validate_provider(provider: str | None) -> str | None:
-    if provider is None or not provider.strip():
-        return None
-    cleaned = provider.strip().lower()
-    if cleaned not in LLM_PROVIDERS:
-        allowed = ", ".join(LLM_PROVIDERS)
-        raise HTTPException(status_code=400, detail=f"Provider must be one of: {allowed}")
-    return cleaned
-
-
-def parse_submitted_meeting_date(value: str | None, content: str):
-    if value and value.strip():
-        parsed = parse_meeting_date(value)
-        if not parsed:
-            raise HTTPException(status_code=400, detail="Invalid meeting_date")
-        return parsed
-    return resolve_meeting_date(None, content)
 
 
 @router.get("", response_model=list[ProjectRead])
@@ -100,8 +70,7 @@ def add_transcript(
     filename = None
 
     if file is not None:
-        validate_transcript_file(file)
-        content = file.file.read().decode("utf-8", errors="ignore")
+        content = read_transcript_upload(file)
         filename = file.filename
 
     if transcript_text:
@@ -244,9 +213,9 @@ def create_task(project_id: int, payload: TaskCreate, db: Session = Depends(get_
     task = models.Task(
         project_id=project_id,
         person_id=payload.person_id,
-        description=payload.description,
-        status=payload.status or "todo",
-        priority=payload.priority or "medium",
+        description=clean_required_text(payload.description, "Task description"),
+        status=validate_status(payload.status),
+        priority=validate_priority(payload.priority),
         due_date=payload.due_date,
     )
     db.add(task)
@@ -273,11 +242,11 @@ def update_task(
     update_data = payload.model_dump(exclude_unset=True)
 
     if "description" in update_data:
-        task.description = update_data["description"]
+        task.description = clean_required_text(update_data["description"], "Task description")
     if "status" in update_data:
-        task.status = update_data["status"]
+        task.status = validate_status(update_data["status"])
     if "priority" in update_data:
-        task.priority = update_data["priority"]
+        task.priority = validate_priority(update_data["priority"])
     if "due_date" in update_data:
         task.due_date = update_data["due_date"]
     if "person_id" in update_data:

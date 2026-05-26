@@ -2,6 +2,8 @@ import re
 from datetime import date, datetime
 from typing import Any
 
+from app.core.time import utc_now
+
 
 DATE_PATTERNS = (
     r"\b([0-2]?\d|3[01])\.(0?[1-9]|1[0-2])\.(20\d{2})\b",
@@ -47,7 +49,7 @@ def extract_meeting_date(content: str) -> date | None:
 
 
 def resolve_meeting_date(value: Any, content: str) -> date:
-    return parse_meeting_date(value) or extract_meeting_date(content) or date.today()
+    return parse_meeting_date(value) or extract_meeting_date(content) or utc_now().date()
 
 
 def format_meeting_date(value: date) -> str:

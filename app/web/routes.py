@@ -1,4 +1,3 @@
-from datetime import date, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -7,12 +6,24 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.core.config import LLM_PROVIDER, LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
+from app.core.time import utc_now
 from app.db import models
 from app.db.database import get_db
 from app.services.agents import TaskLifecycleAgent
 from app.services.extraction_service import run_extraction
 from app.services.llm_service import LLMProviderError
-from app.services.transcript_dates import parse_meeting_date, resolve_meeting_date
+from app.services.project_validation import (
+    clean_optional_text,
+    clean_required_text,
+    parse_due_date,
+    parse_optional_int,
+    parse_submitted_meeting_date,
+    read_transcript_upload,
+    validate_priority,
+    validate_provider,
+    validate_status,
+    validate_transcript_content,
+)
 
 router = APIRouter(tags=["ui"])
 
@@ -23,24 +34,6 @@ templates.env.globals["llm_providers"] = LLM_PROVIDERS
 
 STATUS_LABELS = {"todo": "сделать", "in_progress": "в работе", "done": "готово"}
 PRIORITY_LABELS = {"low": "низкая", "medium": "средняя", "high": "высокая"}
-
-
-def parse_due_date(value: str | None):
-    if not value:
-        return None
-    try:
-        return datetime.strptime(value, "%Y-%m-%d").date()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid due_date") from exc
-
-
-def parse_submitted_meeting_date(value: str | None, content: str):
-    if value and value.strip():
-        parsed = parse_meeting_date(value)
-        if not parsed:
-            raise HTTPException(status_code=400, detail="Invalid meeting_date")
-        return parsed
-    return resolve_meeting_date(None, content)
 
 
 def accepted_task_from_review(
@@ -87,34 +80,6 @@ def accepted_task_from_review(
     )
     db.add(task)
     return task
-
-
-def validate_transcript_content(content: str) -> str:
-    cleaned = content.strip()
-    if not cleaned:
-        raise HTTPException(status_code=400, detail="Transcript content is required")
-    if len(cleaned) > MAX_TRANSCRIPT_CHARS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Transcript must be no longer than {MAX_TRANSCRIPT_CHARS} chars",
-        )
-    return cleaned
-
-
-def validate_transcript_file(file: UploadFile) -> None:
-    filename = (file.filename or "").lower()
-    if not filename.endswith((".txt", ".md")):
-        raise HTTPException(status_code=400, detail="Only .txt and .md transcripts are supported")
-
-
-def validate_provider(provider: str | None) -> str | None:
-    if provider is None or not provider.strip():
-        return None
-    cleaned = provider.strip().lower()
-    if cleaned not in LLM_PROVIDERS:
-        allowed = ", ".join(LLM_PROVIDERS)
-        raise HTTPException(status_code=400, detail=f"Provider must be one of: {allowed}")
-    return cleaned
 
 
 def find_project_matches(project_id: int, query: str | None, db: Session) -> dict[str, list[dict]]:
@@ -280,7 +245,10 @@ def create_project(
     description: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    project = models.Project(name=name, description=description)
+    project = models.Project(
+        name=clean_required_text(name, "Project name"),
+        description=clean_optional_text(description),
+    )
     db.add(project)
     db.commit()
     db.refresh(project)
@@ -298,12 +266,8 @@ def edit_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    cleaned_name = name.strip()
-    if not cleaned_name:
-        raise HTTPException(status_code=400, detail="Project name is required")
-
-    project.name = cleaned_name
-    project.description = (description or "").strip() or None
+    project.name = clean_required_text(name, "Project name")
+    project.description = clean_optional_text(description)
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
@@ -357,7 +321,7 @@ def project_detail(
         .all()
     )
     tasks_query = db.query(models.Task).filter(models.Task.project_id == project_id)
-    selected_person_id = int(person_id) if person_id else None
+    selected_person_id = parse_optional_int(person_id, "person_id")
     if status:
         tasks_query = tasks_query.filter(models.Task.status == status)
     if selected_person_id:
@@ -403,7 +367,7 @@ def project_detail(
                 "priority": priority or "",
                 "q": q or "",
             },
-            "today_date": date.today().isoformat(),
+            "today_date": utc_now().date().isoformat(),
         },
     )
 
@@ -424,8 +388,7 @@ def upload_transcript(
     filename = None
 
     if file is not None:
-        validate_transcript_file(file)
-        content = file.file.read().decode("utf-8", errors="ignore")
+        content = read_transcript_upload(file)
         filename = file.filename
 
     if transcript_text:
@@ -509,7 +472,11 @@ def add_person(
     role: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    person = models.Person(project_id=project_id, name=name, role=role)
+    person = models.Person(
+        project_id=project_id,
+        name=clean_required_text(name, "Person name"),
+        role=clean_optional_text(role),
+    )
     db.add(person)
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
@@ -531,8 +498,8 @@ def edit_person(
     if not person:
         raise HTTPException(status_code=404, detail="Person not found")
 
-    person.name = name
-    person.role = role
+    person.name = clean_required_text(name, "Person name")
+    person.role = clean_optional_text(role)
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
@@ -547,8 +514,11 @@ def add_task(
     due_date: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    parsed_person_id = int(person_id) if person_id else None
+    parsed_person_id = parse_optional_int(person_id, "person_id")
     parsed_due_date = parse_due_date(due_date)
+    cleaned_description = clean_required_text(description, "Task description")
+    cleaned_status = validate_status(status)
+    cleaned_priority = validate_priority(priority)
 
     if parsed_person_id:
         person = (
@@ -562,9 +532,9 @@ def add_task(
     task = models.Task(
         project_id=project_id,
         person_id=parsed_person_id,
-        description=description,
-        status=status,
-        priority=priority,
+        description=cleaned_description,
+        status=cleaned_status,
+        priority=cleaned_priority,
         due_date=parsed_due_date,
     )
     db.add(task)
@@ -600,15 +570,17 @@ def accept_task_suggestion(
         raise HTTPException(status_code=400, detail="Task description is required")
 
     parsed_due_date = parse_due_date(due_date)
-    parsed_person_id = int(person_id) if person_id else None
+    parsed_person_id = parse_optional_int(person_id, "person_id")
+    cleaned_status = validate_status(status)
+    cleaned_priority = validate_priority(priority)
     accepted_task_from_review(
         db,
         project_id,
         suggestion.source_run_id,
         cleaned_description,
         parsed_person_id,
-        status,
-        priority,
+        cleaned_status,
+        cleaned_priority,
         parsed_due_date,
     )
     suggestion.description = cleaned_description
@@ -619,11 +591,11 @@ def accept_task_suggestion(
         if parsed_person_id
         else None
     )
-    suggestion.status = status
-    suggestion.priority = priority
+    suggestion.status = cleaned_status
+    suggestion.priority = cleaned_priority
     suggestion.due_date = parsed_due_date
     suggestion.review_status = "accepted"
-    suggestion.reviewed_at = datetime.utcnow()
+    suggestion.reviewed_at = utc_now()
 
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
@@ -648,7 +620,7 @@ def reject_task_suggestion(
         raise HTTPException(status_code=404, detail="Task suggestion not found")
 
     suggestion.review_status = "rejected"
-    suggestion.reviewed_at = datetime.utcnow()
+    suggestion.reviewed_at = utc_now()
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
@@ -672,8 +644,11 @@ def edit_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    parsed_person_id = int(person_id) if person_id else None
+    parsed_person_id = parse_optional_int(person_id, "person_id")
     parsed_due_date = parse_due_date(due_date)
+    cleaned_description = clean_required_text(description, "Task description")
+    cleaned_status = validate_status(status)
+    cleaned_priority = validate_priority(priority)
 
     if parsed_person_id:
         person = (
@@ -684,10 +659,10 @@ def edit_task(
         if not person:
             raise HTTPException(status_code=400, detail="Ответственный не найден")
 
-    task.description = description
+    task.description = cleaned_description
     task.person_id = parsed_person_id
-    task.status = status
-    task.priority = priority
+    task.status = cleaned_status
+    task.priority = cleaned_priority
     task.due_date = parsed_due_date
 
     db.commit()
@@ -719,7 +694,10 @@ def add_decision(
     description: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    decision = models.Decision(project_id=project_id, description=description)
+    decision = models.Decision(
+        project_id=project_id,
+        description=clean_required_text(description, "Decision description"),
+    )
     db.add(decision)
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)

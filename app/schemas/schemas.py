@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.config import LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
+from app.services.project_validation import ALLOWED_PRIORITIES, ALLOWED_STATUSES
 
 
 class AnalyzeRequest(BaseModel):
@@ -100,6 +101,21 @@ class ProjectCreate(BaseModel):
     name: str = Field(..., max_length=200)
     description: Optional[str] = None
 
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Project name is required")
+        return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.strip() or None
+
 
 class ProjectRead(BaseModel):
     id: int
@@ -137,10 +153,42 @@ class PersonCreate(BaseModel):
     name: str = Field(..., max_length=200)
     role: Optional[str] = None
 
+    @field_validator("name")
+    @classmethod
+    def person_name_must_not_be_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Person name is required")
+        return cleaned
+
+    @field_validator("role")
+    @classmethod
+    def normalize_role(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.strip() or None
+
 
 class PersonUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=200)
     role: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def updated_person_name_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Person name is required")
+        return cleaned
+
+    @field_validator("role")
+    @classmethod
+    def normalize_updated_role(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 class PersonRead(BaseModel):
@@ -161,6 +209,36 @@ class TaskCreate(BaseModel):
     priority: Optional[str] = "medium"
     due_date: Optional[date] = None
 
+    @field_validator("description")
+    @classmethod
+    def task_description_must_not_be_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Task description is required")
+        return cleaned
+
+    @field_validator("status")
+    @classmethod
+    def task_status_must_be_supported(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip().lower()
+        if cleaned not in ALLOWED_STATUSES:
+            allowed = ", ".join(sorted(ALLOWED_STATUSES))
+            raise ValueError(f"Status must be one of: {allowed}")
+        return cleaned
+
+    @field_validator("priority")
+    @classmethod
+    def task_priority_must_be_supported(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        cleaned = value.strip().lower()
+        if cleaned not in ALLOWED_PRIORITIES:
+            allowed = ", ".join(sorted(ALLOWED_PRIORITIES))
+            raise ValueError(f"Priority must be one of: {allowed}")
+        return cleaned
+
 
 class TaskUpdate(BaseModel):
     description: Optional[str] = None
@@ -168,6 +246,38 @@ class TaskUpdate(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None
     due_date: Optional[date] = None
+
+    @field_validator("description")
+    @classmethod
+    def updated_task_description_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Task description is required")
+        return cleaned
+
+    @field_validator("status")
+    @classmethod
+    def updated_task_status_must_be_supported(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip().lower()
+        if cleaned not in ALLOWED_STATUSES:
+            allowed = ", ".join(sorted(ALLOWED_STATUSES))
+            raise ValueError(f"Status must be one of: {allowed}")
+        return cleaned
+
+    @field_validator("priority")
+    @classmethod
+    def updated_task_priority_must_be_supported(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip().lower()
+        if cleaned not in ALLOWED_PRIORITIES:
+            allowed = ", ".join(sorted(ALLOWED_PRIORITIES))
+            raise ValueError(f"Priority must be one of: {allowed}")
+        return cleaned
 
 
 class TaskRead(BaseModel):
@@ -188,6 +298,14 @@ class TaskRead(BaseModel):
 
 class DecisionCreate(BaseModel):
     description: str
+
+    @field_validator("description")
+    @classmethod
+    def decision_description_must_not_be_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Decision description is required")
+        return cleaned
 
 
 class DecisionRead(BaseModel):

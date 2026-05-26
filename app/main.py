@@ -59,9 +59,6 @@ app.include_router(ui_router)
 
 app.mount("/static", StaticFiles(directory="app/frontend/static"), name="static")
 
-init_db()
-
-
 @app.get("/health")
 def health():
     return {"status": "ok"}

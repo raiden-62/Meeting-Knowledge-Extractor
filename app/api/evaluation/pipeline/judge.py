@@ -7,12 +7,24 @@ from app.core.logger import logger
 
 from app.api.evaluation.pipeline.judge_prompt import JUDGE_PROMPT
 
-gigachat_judge = GigaChat(
-    credentials=GIGACHAT_TOKEN,
-    verify_ssl_certs = False,
-    scope="GIGACHAT_API_PERS",
-    #model="GigaChat-Pro" uses too many tokens out of 50k
-)
+gigachat_judge: GigaChat | None = None
+
+
+def get_gigachat_judge() -> GigaChat:
+    global gigachat_judge
+
+    if not GIGACHAT_TOKEN:
+        raise RuntimeError("GIGACHAT_TOKEN is not configured")
+
+    if gigachat_judge is None:
+        gigachat_judge = GigaChat(
+            credentials=GIGACHAT_TOKEN,
+            verify_ssl_certs=False,
+            scope="GIGACHAT_API_PERS",
+            # model="GigaChat-Pro" uses too many tokens out of 50k
+        )
+
+    return gigachat_judge
 
 def gigachat_request(
     request: str,
@@ -25,7 +37,7 @@ def gigachat_request(
 
     for attempt in range(1, max_retries + 1):
         try:
-            response = gigachat_judge.chat(request)
+            response = get_gigachat_judge().chat(request)
 
             content = response.choices[0].message.content
 

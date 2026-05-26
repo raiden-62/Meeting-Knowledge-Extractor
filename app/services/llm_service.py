@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, TypedDict
 
+from app.core.time import utc_now
 from app.core.config import (
     DEEPSEEK_MODEL,
     GIGACHAT_MODEL,
@@ -285,7 +286,7 @@ def _normalize_due_date(value: Any) -> str | None:
     if numeric_match:
         day = int(numeric_match.group(1))
         month = int(numeric_match.group(2))
-        year = int(numeric_match.group(3) or datetime.utcnow().year)
+        year = int(numeric_match.group(3) or utc_now().year)
         try:
             return datetime(year, month, day).date().isoformat()
         except ValueError:
@@ -299,7 +300,7 @@ def _normalize_due_date(value: Any) -> str | None:
     if month_match:
         day = int(month_match.group(1))
         month = MONTHS_RU[month_match.group(2)]
-        year = int(month_match.group(3) or datetime.utcnow().year)
+        year = int(month_match.group(3) or utc_now().year)
         try:
             return datetime(year, month, day).date().isoformat()
         except ValueError:

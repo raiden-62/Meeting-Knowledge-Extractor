@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.time import utc_now
 from app.db import models
 
 DONE_MARKERS = (
@@ -229,7 +230,7 @@ def _safe_date(value: Any):
     match = re.search(r"\b([0-2]?\d|3[01])[./](0?[1-9]|1[0-2])\b", text)
     if match:
         try:
-            return datetime(datetime.utcnow().year, int(match.group(2)), int(match.group(1))).date()
+            return datetime(utc_now().year, int(match.group(2)), int(match.group(1))).date()
         except ValueError:
             return None
     month_names = "|".join(MONTHS_RU)
@@ -240,7 +241,7 @@ def _safe_date(value: Any):
     if month_match:
         try:
             return datetime(
-                int(month_match.group(3) or datetime.utcnow().year),
+                int(month_match.group(3) or utc_now().year),
                 MONTHS_RU[month_match.group(2)],
                 int(month_match.group(1)),
             ).date()
@@ -262,11 +263,7 @@ def _split_segments(text: str) -> list[str]:
 
 
 class ProjectMemoryAgent:
-    def ensure_table(self, db: Session) -> None:
-        models.ProjectMemory.__table__.create(bind=db.get_bind(), checkfirst=True)
-
     def build(self, db: Session, transcript: models.Transcript) -> dict[str, Any]:
-        self.ensure_table(db)
         project = db.query(models.Project).filter(models.Project.id == transcript.project_id).first()
         all_tasks = (
             db.query(models.Task)
@@ -410,7 +407,6 @@ class ProjectMemoryAgent:
         raw_output: dict[str, Any],
         max_chars: int = 3000,
     ) -> None:
-        self.ensure_table(db)
         project = db.query(models.Project).filter(models.Project.id == transcript.project_id).first()
         tasks = (
             db.query(models.Task)
