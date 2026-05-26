@@ -11,10 +11,14 @@ from app.db.database import Base, engine
 from app.web.routes import router as ui_router
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+def init_db() -> None:
     _ = models
     Base.metadata.create_all(bind=engine)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
     yield
 
 
@@ -34,6 +38,8 @@ app.include_router(projects_router)
 app.include_router(ui_router)
 
 app.mount("/static", StaticFiles(directory="app/frontend/static"), name="static")
+
+init_db()
 
 
 @app.get("/health")

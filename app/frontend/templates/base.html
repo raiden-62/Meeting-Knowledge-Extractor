@@ -27,7 +27,47 @@
     </main>
 
     <footer class="site-footer">
-        <span>FastAPI + GigaChat/DeepSeek + agent lifecycle extractor</span>
+        <span>FastAPI + GigaChat/DeepSeek + агентный анализ встреч</span>
     </footer>
+    <script>
+        (() => {
+            const key = `mke-scroll:${window.location.pathname}`;
+            const saved = sessionStorage.getItem(key);
+            if (saved !== null) {
+                sessionStorage.removeItem(key);
+                requestAnimationFrame(() => window.scrollTo(0, Number(saved) || 0));
+            }
+
+            const snapshot = (form) => Array.from(form.elements)
+                .filter((element) => element.name && !["submit", "button"].includes(element.type))
+                .map((element) => `${element.name}=${element.value}`)
+                .join("&");
+
+            document.querySelectorAll("form[data-dirty-check]").forEach((form) => {
+                const initial = snapshot(form);
+                form.dataset.initialSnapshot = initial;
+                const submit = form.querySelector("[data-dirty-submit]");
+                const update = () => {
+                    if (submit) {
+                        submit.disabled = snapshot(form) === initial;
+                    }
+                };
+                form.addEventListener("input", update);
+                form.addEventListener("change", update);
+                update();
+            });
+
+            document.addEventListener("submit", (event) => {
+                const form = event.target;
+                if (form instanceof HTMLFormElement && form.method.toLowerCase() === "post") {
+                    if (form.matches("[data-dirty-check]") && snapshot(form) === form.dataset.initialSnapshot) {
+                        event.preventDefault();
+                        return;
+                    }
+                    sessionStorage.setItem(key, String(window.scrollY));
+                }
+            });
+        })();
+    </script>
 </body>
 </html>

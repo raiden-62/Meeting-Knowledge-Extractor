@@ -5,13 +5,17 @@
 {% set task_updates = latest_output.get("task_updates", []) if latest_output else [] %}
 {% set agent_notes = latest_output.get("agent_notes", []) if latest_output else [] %}
 {% set confidence = latest_output.get("confidence", {}) if latest_output else {} %}
+{% set status_labels = {"todo": "к выполнению", "in_progress": "в работе", "done": "готово"} %}
+{% set priority_labels = {"low": "низкая", "medium": "средняя", "high": "высокая"} %}
+{% set confidence_labels = {"low": "низкая", "medium": "средняя", "high": "высокая"} %}
 
 <section class="project-header">
-    <div>
-        <p class="kicker">Project #{{ project.id }}</p>
-        <h1>{{ project.name }}</h1>
-        <p class="lead">{{ project.description or "Без описания" }}</p>
-    </div>
+    <form class="project-inline-form" action="/projects/{{ project.id }}/edit" method="post" data-dirty-check>
+        <p class="kicker">Проект #{{ project.id }}</p>
+        <input type="text" name="name" class="project-title-input" value="{{ project.name }}" aria-label="Название проекта" required>
+        <textarea name="description" class="project-description-input" rows="2" placeholder="Без описания" aria-label="Описание проекта">{{ project.description or "" }}</textarea>
+        <button type="submit" class="primary inline-save" data-dirty-submit disabled>Сохранить</button>
+    </form>
     <div class="header-actions">
         <a class="ghost-link" href="/projects/{{ project.id }}/export.md">Экспорт MD</a>
         <a class="ghost-link" href="/projects/{{ project.id }}/export.txt">Экспорт TXT</a>
@@ -23,7 +27,7 @@
     <div class="stat">
         <span>Задачи</span>
         <strong>{{ task_stats.total }}</strong>
-        <small>{{ task_stats.todo }} todo · {{ task_stats.in_progress }} in progress · {{ task_stats.done }} done</small>
+        <small>{{ task_stats.todo }} к выполнению · {{ task_stats.in_progress }} в работе · {{ task_stats.done }} готово</small>
     </div>
     <div class="stat">
         <span>Решения</span>
@@ -138,6 +142,58 @@
 <section class="panel">
     <div class="section-head">
         <div>
+            <h2>Задачи с низкой уверенностью</h2>
+            <p class="muted">Предложения по задачам с низкой уверенностью остаются здесь до тех пор, пока они не будут приняты или отклонены.</p>
+        </div>
+    </div>
+    <div class="review-list">
+        {% for suggestion in pending_task_suggestions %}
+        <form id="accept-suggestion-{{ suggestion.id }}" action="/projects/{{ project.id }}/task-suggestions/{{ suggestion.id }}/accept" method="post" class="review-row {{ suggestion.confidence_level }}">
+            <div class="review-meta">
+                <strong>{{ confidence_labels.get(suggestion.confidence_level, suggestion.confidence_level) }}</strong>
+                {% if suggestion.confidence_score is not none %}
+                <span>{{ "%.0f"|format(suggestion.confidence_score * 100) }}%</span>
+                {% endif %}
+                {% if suggestion.confidence_flags %}
+                <small>{{ ", ".join(suggestion.confidence_flags) }}</small>
+                {% endif %}
+                {% if suggestion.confidence_reason %}
+                <small>{{ suggestion.confidence_reason }}</small>
+                {% endif %}
+            </div>
+            <input type="text" name="description" value="{{ suggestion.description }}" required>
+            <select name="person_id" aria-label="Кому поручена">
+                <option value="">Без ответственного</option>
+                {% for person in people %}
+                <option value="{{ person.id }}" {% if suggestion.assignee_name and person.name|lower == suggestion.assignee_name|lower %}selected{% endif %}>{{ person.name }}</option>
+                {% endfor %}
+            </select>
+            <select name="status" aria-label="Статус">
+                <option value="todo" {% if suggestion.status == "todo" %}selected{% endif %}>к выполнению</option>
+                <option value="in_progress" {% if suggestion.status == "in_progress" %}selected{% endif %}>в работе</option>
+                <option value="done" {% if suggestion.status == "done" %}selected{% endif %}>готово</option>
+            </select>
+            <select name="priority" aria-label="Важность">
+                <option value="low" {% if suggestion.priority == "low" %}selected{% endif %}>низкая</option>
+                <option value="medium" {% if suggestion.priority == "medium" %}selected{% endif %}>средняя</option>
+                <option value="high" {% if suggestion.priority == "high" %}selected{% endif %}>высокая</option>
+            </select>
+            <input type="date" name="due_date" value="{{ suggestion.due_date.isoformat() if suggestion.due_date else '' }}" aria-label="Дата поручения">
+            <div class="review-actions">
+                <button type="submit" class="primary">Принять</button>
+                <button type="submit" class="danger" form="reject-suggestion-{{ suggestion.id }}">Отклонить</button>
+            </div>
+        </form>
+        <form id="reject-suggestion-{{ suggestion.id }}" action="/projects/{{ project.id }}/task-suggestions/{{ suggestion.id }}/reject" method="post" class="hidden-form"></form>
+        {% else %}
+        <div class="empty">Нет задач с низкой уверенностью.</div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="panel">
+    <div class="section-head">
+        <div>
             <h2>Контроль качества AI</h2>
             <p class="muted">Сомнительные задачи, статусы, решения, риски и ответственные из последнего анализа.</p>
         </div>
@@ -145,28 +201,28 @@
     <div class="confidence-list">
         {% for item in confidence.get("tasks", []) if item.get("level") != "high" %}
         <div class="confidence-row {{ item.get("level", "medium") }}">
-            <strong>Задача · {{ item.get("level", "medium") }}</strong>
+            <strong>Задача · {{ confidence_labels.get(item.get("level", "medium"), item.get("level", "medium")) }}</strong>
             <span>{{ item.get("description", "") }}</span>
             <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
         </div>
         {% endfor %}
         {% for item in confidence.get("task_updates", []) if item.get("level") != "high" %}
         <div class="confidence-row {{ item.get("level", "medium") }}">
-            <strong>Статус · {{ item.get("level", "medium") }}</strong>
+            <strong>Статус · {{ confidence_labels.get(item.get("level", "medium"), item.get("level", "medium")) }}</strong>
             <span>{{ item.get("description", "") }}</span>
             <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
         </div>
         {% endfor %}
         {% for item in confidence.get("decisions", []) if item.get("level") != "high" %}
         <div class="confidence-row {{ item.get("level", "medium") }}">
-            <strong>Решение · {{ item.get("level", "medium") }}</strong>
+            <strong>Решение · {{ confidence_labels.get(item.get("level", "medium"), item.get("level", "medium")) }}</strong>
             <span>{{ item.get("description", "") }}</span>
             <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
         </div>
         {% endfor %}
         {% for item in confidence.get("risks", []) if item.get("level") != "high" %}
         <div class="confidence-row {{ item.get("level", "medium") }}">
-            <strong>Риск · {{ item.get("level", "medium") }}</strong>
+            <strong>Риск · {{ confidence_labels.get(item.get("level", "medium"), item.get("level", "medium")) }}</strong>
             <span>{{ item.get("description", "") }}</span>
             <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
         </div>
@@ -185,7 +241,7 @@
         <ul class="stack">
             {% for update in task_updates %}
             <li>
-                #{{ update.get("task_id") or "?" }} · {{ update.get("status", "done") }} ·
+                #{{ update.get("task_id") or "?" }} · {{ status_labels.get(update.get("status", "done"), update.get("status", "done")) }} ·
                 {{ update.get("description", "задача") }}
                 {% if update.get("reason") %}<span class="meta">- {{ update.get("reason") }}</span>{% endif %}
             </li>
@@ -252,9 +308,9 @@
     <form class="filters" method="get" action="/projects/{{ project.id }}">
         <select name="status">
             <option value="">Все статусы</option>
-            <option value="todo" {% if filters.status == "todo" %}selected{% endif %}>todo</option>
-            <option value="in_progress" {% if filters.status == "in_progress" %}selected{% endif %}>in_progress</option>
-            <option value="done" {% if filters.status == "done" %}selected{% endif %}>done</option>
+            <option value="todo" {% if filters.status == "todo" %}selected{% endif %}>к выполнению</option>
+            <option value="in_progress" {% if filters.status == "in_progress" %}selected{% endif %}>в работе</option>
+            <option value="done" {% if filters.status == "done" %}selected{% endif %}>готово</option>
         </select>
         <select name="person_id">
             <option value="">Все ответственные</option>
@@ -264,9 +320,9 @@
         </select>
         <select name="priority">
             <option value="">Все приоритеты</option>
-            <option value="low" {% if filters.priority == "low" %}selected{% endif %}>low</option>
-            <option value="medium" {% if filters.priority == "medium" %}selected{% endif %}>medium</option>
-            <option value="high" {% if filters.priority == "high" %}selected{% endif %}>high</option>
+            <option value="low" {% if filters.priority == "low" %}selected{% endif %}>низкая</option>
+            <option value="medium" {% if filters.priority == "medium" %}selected{% endif %}>средняя</option>
+            <option value="high" {% if filters.priority == "high" %}selected{% endif %}>высокая</option>
         </select>
         <button type="submit">Применить</button>
         <a class="ghost-link" href="/projects/{{ project.id }}">Сбросить</a>
@@ -282,14 +338,14 @@
                 {% endfor %}
             </select>
             <select name="status" aria-label="Статус">
-                <option value="todo">todo</option>
-                <option value="in_progress">in_progress</option>
-                <option value="done">done</option>
+                <option value="todo">к выполнению</option>
+                <option value="in_progress">в работе</option>
+                <option value="done">готово</option>
             </select>
             <select name="priority" aria-label="Важность">
-                <option value="low">low</option>
-                <option value="medium" selected>medium</option>
-                <option value="high">high</option>
+                <option value="low">низкая</option>
+                <option value="medium" selected>средняя</option>
+                <option value="high">высокая</option>
             </select>
             <button type="submit" class="primary">Добавить</button>
         </form>
@@ -305,7 +361,7 @@
 
         <div class="task-list">
         {% for task in tasks %}
-            <form id="edit-task-{{ task.id }}" action="/projects/{{ project.id }}/tasks/{{ task.id }}/edit" method="post" class="task-row">
+            <form id="edit-task-{{ task.id }}" action="/projects/{{ project.id }}/tasks/{{ task.id }}/edit" method="post" class="task-row" data-dirty-check>
                 <input type="text" name="description" class="task-title-input" value="{{ task.description }}" title="{{ task.description }}" required>
                 <select name="person_id" aria-label="Кому поручена">
                     <option value="">Без ответственного</option>
@@ -314,18 +370,18 @@
                     {% endfor %}
                 </select>
                 <select name="status" aria-label="Статус">
-                    <option value="todo" {% if task.status == "todo" %}selected{% endif %}>todo</option>
-                    <option value="in_progress" {% if task.status == "in_progress" %}selected{% endif %}>in_progress</option>
-                    <option value="done" {% if task.status == "done" %}selected{% endif %}>done</option>
+                    <option value="todo" {% if task.status == "todo" %}selected{% endif %}>к выполнению</option>
+                    <option value="in_progress" {% if task.status == "in_progress" %}selected{% endif %}>в работе</option>
+                    <option value="done" {% if task.status == "done" %}selected{% endif %}>готово</option>
                 </select>
                 <select name="priority" aria-label="Важность">
-                    <option value="low" {% if task.priority == "low" %}selected{% endif %}>low</option>
-                    <option value="medium" {% if task.priority == "medium" %}selected{% endif %}>medium</option>
-                    <option value="high" {% if task.priority == "high" %}selected{% endif %}>high</option>
+                    <option value="low" {% if task.priority == "low" %}selected{% endif %}>низкая</option>
+                    <option value="medium" {% if task.priority == "medium" %}selected{% endif %}>средняя</option>
+                    <option value="high" {% if task.priority == "high" %}selected{% endif %}>высокая</option>
                 </select>
                 <span class="task-assigned-date" title="Дата встречи: {{ task.meeting_date.strftime("%d.%m.%Y") if task.meeting_date else task.created_at.strftime("%d.%m.%Y") }}. Обновлено: {{ task.updated_at.strftime("%d.%m.%Y %H:%M") }}">Дата поручения: {{ task.created_at.strftime("%d.%m.%Y") }}</span>
                 <div class="task-actions">
-                    <button type="submit" class="primary">Сохранить</button>
+                    <button type="submit" class="primary" data-dirty-submit disabled>Сохранить</button>
                     <button type="submit" class="danger" form="delete-task-{{ task.id }}">Удалить</button>
                 </div>
             </form>
@@ -363,8 +419,8 @@
         <div class="run-list">
             {% for run in runs %}
             <div class="run-row">
-                <strong>Run #{{ run.id }}</strong>
-                <span>{{ run.provider }} · {{ run.model_name or "default" }}</span>
+                <strong>Запуск #{{ run.id }}</strong>
+                <span>{{ run.provider }} · {{ run.model_name or "по умолчанию" }}</span>
                 <span>{{ run.status }} · {{ "%.2f"|format(run.response_time_seconds or 0) }}s</span>
                 <small>{{ run.created_at.strftime("%Y-%m-%d %H:%M") }}</small>
             </div>

@@ -1,4 +1,5 @@
 import json
+import re
 
 from fastapi.testclient import TestClient
 
@@ -570,6 +571,13 @@ def test_ui_task_create_without_due_date():
         json={"name": "Task UI", "description": "Manual task check"},
     )
     project_id = project_response.json()["id"]
+    edit_project_response = client.post(
+        f"/projects/{project_id}/edit",
+        data={"name": "Task UI", "description": "Updated context"},
+        follow_redirects=False,
+    )
+    assert edit_project_response.status_code == 303
+    assert client.get(f"/api/projects/{project_id}").json()["description"] == "Updated context"
 
     create_response = client.post(
         f"/projects/{project_id}/tasks",
@@ -588,6 +596,87 @@ def test_ui_task_create_without_due_date():
 
     detail_page = client.get(f"/projects/{project_id}")
     assert detail_page.status_code == 200
+
+
+def test_low_confidence_task_waits_for_human_review(monkeypatch):
+    low_confidence_response = sample_response()
+    low_confidence_response["tasks"] = [
+        {
+            "description": "confirm vendor budget",
+            "assignee": "",
+            "status": "todo",
+            "priority": "medium",
+            "due_date": None,
+        }
+    ]
+    low_confidence_response["people"] = {}
+    low_confidence_response["confidence"] = {
+        "tasks": [
+            {
+                "index": 0,
+                "description": "confirm vendor budget",
+                "level": "low",
+                "score": 0.4,
+                "flags": ["assignee missing"],
+                "reason": "speaker was unclear",
+            }
+        ],
+        "task_updates": [],
+        "decisions": [],
+        "risks": [],
+    }
+
+    monkeypatch.setattr(
+        extraction_service,
+        "process_meeting",
+        lambda transcript, **kwargs: low_confidence_response,
+    )
+
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Review Queue", "description": "Human review"},
+    )
+    project_id = project_response.json()["id"]
+    person_response = client.post(
+        f"/api/projects/{project_id}/people",
+        json={"name": "Mia"},
+    )
+    person_id = person_response.json()["id"]
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={"transcript_text": "Maybe someone should confirm vendor budget."},
+    )
+
+    extract_response = client.post(
+        f"/api/projects/{project_id}/extract",
+        data={"transcript_id": transcript_response.json()["id"]},
+    )
+    assert extract_response.status_code == 200
+
+    tasks = client.get(f"/api/projects/{project_id}/tasks").json()
+    assert "confirm vendor budget" not in {task["description"] for task in tasks}
+
+    detail_page = client.get(f"/projects/{project_id}")
+    assert detail_page.status_code == 200
+    assert "Задачи с низкой уверенностью" in detail_page.text
+    assert "confirm vendor budget" in detail_page.text
+
+    match = re.search(r"/task-suggestions/(\d+)/accept", detail_page.text)
+    assert match is not None
+    accept_response = client.post(
+        f"/projects/{project_id}/task-suggestions/{match.group(1)}/accept",
+        data={
+            "description": "confirm vendor budget",
+            "person_id": str(person_id),
+            "status": "todo",
+            "priority": "medium",
+        },
+        follow_redirects=False,
+    )
+    assert accept_response.status_code == 303
+
+    tasks = client.get(f"/api/projects/{project_id}/tasks").json()
+    assert "confirm vendor budget" in {task["description"] for task in tasks}
     assert "Дата поручения" in detail_page.text
     assert "Срок" not in detail_page.text
 

@@ -101,6 +101,7 @@ STOPWORDS = {
 PRIORITY_RANK = {"low": 0, "medium": 1, "high": 2}
 STATUS_RANK = {"todo": 0, "in_progress": 1, "done": 2}
 ALLOWED_STATUSES = {"todo", "in_progress", "done"}
+REVIEW_CONFIDENCE_LEVELS = {"low"}
 MONTHS_RU = {
     "января": 1,
     "январь": 1,
@@ -466,6 +467,7 @@ class TaskLifecycleAgent:
     ) -> dict[str, int]:
         stats = {
             "created_tasks": 0,
+            "created_task_suggestions": 0,
             "updated_tasks": 0,
             "created_decisions": 0,
             "deduplicated_tasks": 0,
@@ -487,15 +489,14 @@ class TaskLifecycleAgent:
         self._apply_task_updates(transcript, existing_tasks, updates, stats)
 
         tasks = self._task_payloads_from_output(raw_output)
-        for item in tasks:
+        confidence_by_index = self._confidence_by_index(raw_output)
+        for index, item in enumerate(tasks):
             description = _clean_text(item.get("description") or item.get("task"))
             if not description:
                 continue
 
             assignee = _clean_text(item.get("assignee") or "")
             person_id = None
-            if assignee:
-                person_id = get_or_create_person(db, transcript.project_id, assignee).id
 
             status = _clean_text(item.get("status") or "todo").lower()
             if status not in ALLOWED_STATUSES:
@@ -512,6 +513,26 @@ class TaskLifecycleAgent:
                 or item.get("deadline_date")
                 or item.get("dueDate")
             )
+
+            confidence = confidence_by_index.get(index, {})
+            if self._should_review_task(confidence):
+                created_suggestion = self._add_task_suggestion(
+                    db,
+                    transcript,
+                    run,
+                    description,
+                    assignee,
+                    status,
+                    priority,
+                    due_date,
+                    confidence,
+                )
+                if created_suggestion:
+                    stats["created_task_suggestions"] += 1
+                continue
+
+            if assignee:
+                person_id = get_or_create_person(db, transcript.project_id, assignee).id
 
             existing = self.find_matching_task(existing_tasks, description, assignee)
             if existing:
@@ -546,6 +567,89 @@ class TaskLifecycleAgent:
         raw_output["lifecycle"] = stats
         run.raw_response = raw_output
         return stats
+
+    def _confidence_by_index(self, raw_output: dict[str, Any]) -> dict[int, dict[str, Any]]:
+        confidence = raw_output.get("confidence") if isinstance(raw_output, dict) else {}
+        task_confidence = confidence.get("tasks", []) if isinstance(confidence, dict) else []
+        result: dict[int, dict[str, Any]] = {}
+        if not isinstance(task_confidence, list):
+            return result
+
+        for fallback_index, item in enumerate(task_confidence):
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("index", fallback_index))
+            except (TypeError, ValueError):
+                index = fallback_index
+            result[index] = item
+        return result
+
+    def _should_review_task(self, confidence: dict[str, Any]) -> bool:
+        level = _clean_text(
+            confidence.get("level") if isinstance(confidence, dict) else ""
+        ).lower()
+        return level in REVIEW_CONFIDENCE_LEVELS
+
+    def _add_task_suggestion(
+        self,
+        db: Session,
+        transcript: models.Transcript,
+        run: models.ExtractionRun,
+        description: str,
+        assignee: str,
+        status: str,
+        priority: str,
+        due_date,
+        confidence: dict[str, Any],
+    ) -> bool:
+        score = confidence.get("score") if isinstance(confidence, dict) else None
+        try:
+            confidence_score = float(score) if score is not None else None
+        except (TypeError, ValueError):
+            confidence_score = None
+
+        flags = confidence.get("flags") if isinstance(confidence, dict) else []
+        if not isinstance(flags, list):
+            flags = []
+
+        normalized_description = _normalize_text(description)
+        normalized_assignee = _normalize_text(assignee)
+        existing_suggestions = (
+            db.query(models.TaskSuggestion)
+            .filter(
+                models.TaskSuggestion.project_id == transcript.project_id,
+                models.TaskSuggestion.review_status == "pending",
+            )
+            .all()
+        )
+        for suggestion in existing_suggestions:
+            if (
+                _normalize_text(suggestion.description) == normalized_description
+                and _normalize_text(suggestion.assignee_name or "") == normalized_assignee
+            ):
+                return False
+
+        db.add(
+            models.TaskSuggestion(
+                project_id=transcript.project_id,
+                source_run_id=run.id,
+                description=description,
+                assignee_name=assignee or None,
+                status=status,
+                priority=priority,
+                due_date=due_date,
+                confidence_level=(
+                    _clean_text(confidence.get("level") or "low")
+                    if isinstance(confidence, dict)
+                    else "low"
+                ),
+                confidence_score=confidence_score,
+                confidence_flags=[_clean_text(flag) for flag in flags if _clean_text(flag)],
+                confidence_reason=_clean_text(confidence.get("reason")) if isinstance(confidence, dict) else None,
+            )
+        )
+        return True
 
     def infer_task_updates(
         self,

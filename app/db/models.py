@@ -31,6 +31,10 @@ class Project(Base):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    task_suggestions: Mapped[list["TaskSuggestion"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
     decisions: Mapped[list["Decision"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
@@ -92,6 +96,10 @@ class ExtractionRun(Base):
         back_populates="source_run",
         cascade="all, delete-orphan",
     )
+    task_suggestions: Mapped[list["TaskSuggestion"]] = relationship(
+        back_populates="source_run",
+        cascade="all, delete-orphan",
+    )
     decisions: Mapped[list["Decision"]] = relationship(
         back_populates="source_run",
         cascade="all, delete-orphan",
@@ -147,6 +155,29 @@ class Task(Base):
     @property
     def last_updated_at(self) -> datetime:
         return self.updated_at
+
+
+class TaskSuggestion(Base):
+    __tablename__ = "task_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    source_run_id: Mapped[int | None] = mapped_column(ForeignKey("extraction_runs.id"))
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    assignee_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="todo")
+    priority: Mapped[str] = mapped_column(String(40), default="medium")
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    confidence_level: Mapped[str] = mapped_column(String(20), default="low")
+    confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    confidence_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    project: Mapped[Project] = relationship(back_populates="task_suggestions")
+    source_run: Mapped[ExtractionRun | None] = relationship(back_populates="task_suggestions")
 
 
 class Decision(Base):

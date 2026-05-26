@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.config import LLM_PROVIDER, LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
 from app.db import models
 from app.db.database import get_db
+from app.services.agents import TaskLifecycleAgent
 from app.services.extraction_service import run_extraction
 from app.services.llm_service import LLMProviderError
 
@@ -19,6 +20,9 @@ templates.env.globals["max_transcript_chars"] = MAX_TRANSCRIPT_CHARS
 templates.env.globals["llm_provider"] = LLM_PROVIDER
 templates.env.globals["llm_providers"] = LLM_PROVIDERS
 
+STATUS_LABELS = {"todo": "к выполнению", "in_progress": "в работе", "done": "готово"}
+PRIORITY_LABELS = {"low": "низкая", "medium": "средняя", "high": "высокая"}
+
 
 def parse_due_date(value: str | None):
     if not value:
@@ -27,6 +31,52 @@ def parse_due_date(value: str | None):
         return datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid due_date") from exc
+
+
+def accepted_task_from_review(
+    db: Session,
+    project_id: int,
+    source_run_id: int | None,
+    description: str,
+    person_id: int | None,
+    status: str,
+    priority: str,
+    due_date,
+) -> models.Task:
+    assignee_name = ""
+    if person_id:
+        person = (
+            db.query(models.Person)
+            .filter(models.Person.id == person_id, models.Person.project_id == project_id)
+            .first()
+        )
+        if not person:
+            raise HTTPException(status_code=400, detail="Ответственный не найден")
+        assignee_name = person.name
+
+    existing_tasks = (
+        db.query(models.Task)
+        .filter(models.Task.project_id == project_id)
+        .order_by(models.Task.updated_at.desc())
+        .all()
+    )
+    lifecycle = TaskLifecycleAgent()
+    existing = lifecycle.find_matching_task(existing_tasks, description, assignee_name)
+    if existing:
+        lifecycle._merge_task(existing, person_id, status, priority, due_date)
+        return existing
+
+    task = models.Task(
+        project_id=project_id,
+        person_id=person_id,
+        source_run_id=source_run_id,
+        description=description,
+        status=status,
+        priority=priority,
+        due_date=due_date,
+    )
+    db.add(task)
+    return task
 
 
 def validate_transcript_content(content: str) -> str:
@@ -71,7 +121,10 @@ def find_project_matches(project_id: int, query: str | None, db: Session) -> dic
         {
             "id": task.id,
             "title": task.description,
-            "meta": f"{task.status} · {task.priority}",
+            "meta": (
+                f"{STATUS_LABELS.get(task.status, task.status)} · "
+                f"{PRIORITY_LABELS.get(task.priority, task.priority)}"
+            ),
         }
         for task in db.query(models.Task).filter(models.Task.project_id == project_id).all()
         if hit(task.description) or hit(task.status) or hit(task.priority) or hit(task.assignee.name if task.assignee else "")
@@ -153,7 +206,11 @@ def build_project_report(project: models.Project, db: Session, markdown: bool = 
             "## Задачи",
         ]
         lines.extend(
-            f"- [{task.status}] {task.description} ({task.assignee.name if task.assignee else 'без ответственного'}, {task.priority})"
+            (
+                f"- [{STATUS_LABELS.get(task.status, task.status)}] {task.description} "
+                f"({task.assignee.name if task.assignee else 'без ответственного'}, "
+                f"{PRIORITY_LABELS.get(task.priority, task.priority)})"
+            )
             for task in tasks
         )
         if not tasks:
@@ -178,7 +235,11 @@ def build_project_report(project: models.Project, db: Session, markdown: bool = 
         "Задачи:",
     ]
     lines.extend(
-        f"- {task.status}: {task.description} ({task.assignee.name if task.assignee else 'без ответственного'}, {task.priority})"
+        (
+            f"- {STATUS_LABELS.get(task.status, task.status)}: {task.description} "
+            f"({task.assignee.name if task.assignee else 'без ответственного'}, "
+            f"{PRIORITY_LABELS.get(task.priority, task.priority)})"
+        )
         for task in tasks
     )
     lines.extend(["", "Решения:"])
@@ -214,6 +275,27 @@ def create_project(
     db.commit()
     db.refresh(project)
     return RedirectResponse(url=f"/projects/{project.id}", status_code=303)
+
+
+@router.post("/projects/{project_id}/edit")
+def edit_project(
+    project_id: int,
+    name: str = Form(...),
+    description: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    project = db.query(models.Project).filter(models.Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    cleaned_name = name.strip()
+    if not cleaned_name:
+        raise HTTPException(status_code=400, detail="Project name is required")
+
+    project.name = cleaned_name
+    project.description = (description or "").strip() or None
+    db.commit()
+    return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
 
 @router.get("/projects/{project_id}", response_class=HTMLResponse)
@@ -255,6 +337,15 @@ def project_detail(
         .order_by(models.Task.created_at.desc())
         .all()
     )
+    pending_task_suggestions = (
+        db.query(models.TaskSuggestion)
+        .filter(
+            models.TaskSuggestion.project_id == project_id,
+            models.TaskSuggestion.review_status == "pending",
+        )
+        .order_by(models.TaskSuggestion.created_at.desc())
+        .all()
+    )
     tasks_query = db.query(models.Task).filter(models.Task.project_id == project_id)
     selected_person_id = int(person_id) if person_id else None
     if status:
@@ -290,6 +381,7 @@ def project_detail(
             "people": people,
             "tasks": tasks,
             "all_tasks": all_tasks,
+            "pending_task_suggestions": pending_task_suggestions,
             "decisions": decisions,
             "latest_output": latest_output,
             "latest_run": latest_run,
@@ -451,7 +543,7 @@ def add_task(
             .first()
         )
         if not person:
-            raise HTTPException(status_code=400, detail="Assignee not found")
+            raise HTTPException(status_code=400, detail="Ответственный не найден")
 
     task = models.Task(
         project_id=project_id,
@@ -462,6 +554,87 @@ def add_task(
         due_date=parsed_due_date,
     )
     db.add(task)
+    db.commit()
+    return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
+
+
+@router.post("/projects/{project_id}/task-suggestions/{suggestion_id}/accept")
+def accept_task_suggestion(
+    project_id: int,
+    suggestion_id: int,
+    description: str = Form(...),
+    person_id: str | None = Form(None),
+    status: str = Form("todo"),
+    priority: str = Form("medium"),
+    due_date: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    suggestion = (
+        db.query(models.TaskSuggestion)
+        .filter(
+            models.TaskSuggestion.id == suggestion_id,
+            models.TaskSuggestion.project_id == project_id,
+            models.TaskSuggestion.review_status == "pending",
+        )
+        .first()
+    )
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="Task suggestion not found")
+
+    cleaned_description = description.strip()
+    if not cleaned_description:
+        raise HTTPException(status_code=400, detail="Task description is required")
+
+    parsed_due_date = parse_due_date(due_date)
+    parsed_person_id = int(person_id) if person_id else None
+    accepted_task_from_review(
+        db,
+        project_id,
+        suggestion.source_run_id,
+        cleaned_description,
+        parsed_person_id,
+        status,
+        priority,
+        parsed_due_date,
+    )
+    suggestion.description = cleaned_description
+    suggestion.assignee_name = (
+        db.query(models.Person.name)
+        .filter(models.Person.id == parsed_person_id, models.Person.project_id == project_id)
+        .scalar()
+        if parsed_person_id
+        else None
+    )
+    suggestion.status = status
+    suggestion.priority = priority
+    suggestion.due_date = parsed_due_date
+    suggestion.review_status = "accepted"
+    suggestion.reviewed_at = datetime.utcnow()
+
+    db.commit()
+    return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
+
+
+@router.post("/projects/{project_id}/task-suggestions/{suggestion_id}/reject")
+def reject_task_suggestion(
+    project_id: int,
+    suggestion_id: int,
+    db: Session = Depends(get_db),
+):
+    suggestion = (
+        db.query(models.TaskSuggestion)
+        .filter(
+            models.TaskSuggestion.id == suggestion_id,
+            models.TaskSuggestion.project_id == project_id,
+            models.TaskSuggestion.review_status == "pending",
+        )
+        .first()
+    )
+    if not suggestion:
+        raise HTTPException(status_code=404, detail="Task suggestion not found")
+
+    suggestion.review_status = "rejected"
+    suggestion.reviewed_at = datetime.utcnow()
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
@@ -495,7 +668,7 @@ def edit_task(
             .first()
         )
         if not person:
-            raise HTTPException(status_code=400, detail="Assignee not found")
+            raise HTTPException(status_code=400, detail="Ответственный не найден")
 
     task.description = description
     task.person_id = parsed_person_id
