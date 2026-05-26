@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -12,6 +12,7 @@ from app.db.database import get_db
 from app.services.agents import TaskLifecycleAgent
 from app.services.extraction_service import run_extraction
 from app.services.llm_service import LLMProviderError
+from app.services.transcript_dates import parse_meeting_date, resolve_meeting_date
 
 router = APIRouter(tags=["ui"])
 
@@ -20,7 +21,7 @@ templates.env.globals["max_transcript_chars"] = MAX_TRANSCRIPT_CHARS
 templates.env.globals["llm_provider"] = LLM_PROVIDER
 templates.env.globals["llm_providers"] = LLM_PROVIDERS
 
-STATUS_LABELS = {"todo": "к выполнению", "in_progress": "в работе", "done": "готово"}
+STATUS_LABELS = {"todo": "сделать", "in_progress": "в работе", "done": "готово"}
 PRIORITY_LABELS = {"low": "низкая", "medium": "средняя", "high": "высокая"}
 
 
@@ -31,6 +32,15 @@ def parse_due_date(value: str | None):
         return datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid due_date") from exc
+
+
+def parse_submitted_meeting_date(value: str | None, content: str):
+    if value and value.strip():
+        parsed = parse_meeting_date(value)
+        if not parsed:
+            raise HTTPException(status_code=400, detail="Invalid meeting_date")
+        return parsed
+    return resolve_meeting_date(None, content)
 
 
 def accepted_task_from_review(
@@ -393,6 +403,7 @@ def project_detail(
                 "priority": priority or "",
                 "q": q or "",
             },
+            "today_date": date.today().isoformat(),
         },
     )
 
@@ -401,6 +412,7 @@ def project_detail(
 def upload_transcript(
     project_id: int,
     transcript_text: str | None = Form(None),
+    meeting_date: str | None = Form(None),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
@@ -423,11 +435,13 @@ def upload_transcript(
         raise HTTPException(status_code=400, detail="Transcript content is required")
 
     content = validate_transcript_content(content)
+    parsed_meeting_date = parse_submitted_meeting_date(meeting_date, content)
 
     transcript = models.Transcript(
         project_id=project_id,
         content=content,
         source_filename=filename,
+        meeting_date=parsed_meeting_date,
     )
     db.add(transcript)
     db.commit()

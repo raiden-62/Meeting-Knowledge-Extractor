@@ -57,6 +57,86 @@
                 update();
             });
 
+            const toIsoDate = (year, month, day) => {
+                const parsed = new Date(Number(year), Number(month) - 1, Number(day));
+                if (
+                    parsed.getFullYear() !== Number(year) ||
+                    parsed.getMonth() !== Number(month) - 1 ||
+                    parsed.getDate() !== Number(day)
+                ) {
+                    return "";
+                }
+                return [
+                    parsed.getFullYear(),
+                    String(parsed.getMonth() + 1).padStart(2, "0"),
+                    String(parsed.getDate()).padStart(2, "0"),
+                ].join("-");
+            };
+
+            const localToday = () => {
+                const now = new Date();
+                return toIsoDate(now.getFullYear(), now.getMonth() + 1, now.getDate());
+            };
+
+            const extractMeetingDate = (text) => {
+                const head = String(text || "").slice(0, 1000);
+                const dotDate = head.match(/\b([0-2]?\d|3[01])\.(0?[1-9]|1[0-2])\.(20\d{2})\b/);
+                if (dotDate) {
+                    return toIsoDate(dotDate[3], dotDate[2], dotDate[1]);
+                }
+                const slashDate = head.match(/\b([0-2]?\d|3[01])\/(0?[1-9]|1[0-2])\/(20\d{2})\b/);
+                if (slashDate) {
+                    return toIsoDate(slashDate[3], slashDate[2], slashDate[1]);
+                }
+                const isoDate = head.match(/\b(20\d{2})-(0[1-9]|1[0-2])-([0-2]\d|3[01])\b/);
+                if (isoDate) {
+                    return toIsoDate(isoDate[1], isoDate[2], isoDate[3]);
+                }
+                return "";
+            };
+
+            document.querySelectorAll("form[data-transcript-upload]").forEach((form) => {
+                const dateInput = form.querySelector("[data-meeting-date-input]");
+                const textInput = form.querySelector("[data-transcript-text-input]");
+                const fileInput = form.querySelector("[data-transcript-file-input]");
+                if (!dateInput) {
+                    return;
+                }
+
+                if (!dateInput.value) {
+                    dateInput.value = localToday();
+                }
+
+                let dateWasEdited = false;
+                dateInput.addEventListener("input", () => {
+                    dateWasEdited = true;
+                });
+                dateInput.addEventListener("change", () => {
+                    dateWasEdited = true;
+                });
+
+                const applyExtractedDate = (text) => {
+                    const parsed = extractMeetingDate(text);
+                    if (parsed && !dateWasEdited) {
+                        dateInput.value = parsed;
+                    }
+                };
+
+                if (textInput) {
+                    textInput.addEventListener("input", () => applyExtractedDate(textInput.value));
+                }
+
+                if (fileInput) {
+                    fileInput.addEventListener("change", () => {
+                        const file = fileInput.files && fileInput.files[0];
+                        if (!file) {
+                            return;
+                        }
+                        file.text().then(applyExtractedDate).catch(() => {});
+                    });
+                }
+            });
+
             document.addEventListener("submit", (event) => {
                 const form = event.target;
                 if (form instanceof HTMLFormElement && form.method.toLowerCase() === "post") {

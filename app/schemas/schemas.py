@@ -115,6 +115,7 @@ class TranscriptRead(BaseModel):
     id: int
     project_id: int
     source_filename: Optional[str] = None
+    meeting_date: Optional[date] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -177,7 +178,7 @@ class TaskRead(BaseModel):
     status: str
     priority: str
     due_date: Optional[date] = None
-    meeting_date: Optional[datetime] = None
+    meeting_date: Optional[date] = None
     last_updated_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

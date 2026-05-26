@@ -20,6 +20,7 @@ from app.schemas.schemas import (
 )
 from app.services.extraction_service import run_extraction
 from app.services.llm_service import LLMProviderError
+from app.services.transcript_dates import parse_meeting_date, resolve_meeting_date
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -52,6 +53,15 @@ def validate_provider(provider: str | None) -> str | None:
     return cleaned
 
 
+def parse_submitted_meeting_date(value: str | None, content: str):
+    if value and value.strip():
+        parsed = parse_meeting_date(value)
+        if not parsed:
+            raise HTTPException(status_code=400, detail="Invalid meeting_date")
+        return parsed
+    return resolve_meeting_date(None, content)
+
+
 @router.get("", response_model=list[ProjectRead])
 def list_projects(db: Session = Depends(get_db)):
     return db.query(models.Project).order_by(models.Project.created_at.desc()).all()
@@ -78,6 +88,7 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
 def add_transcript(
     project_id: int,
     transcript_text: str | None = Form(None),
+    meeting_date: str | None = Form(None),
     file: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
@@ -100,11 +111,13 @@ def add_transcript(
         raise HTTPException(status_code=400, detail="Transcript content is required")
 
     content = validate_transcript_content(content)
+    parsed_meeting_date = parse_submitted_meeting_date(meeting_date, content)
 
     transcript = models.Transcript(
         project_id=project_id,
         content=content,
         source_filename=filename,
+        meeting_date=parsed_meeting_date,
     )
     db.add(transcript)
     db.commit()

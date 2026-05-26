@@ -67,6 +67,7 @@ class Transcript(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     source_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    meeting_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     project: Mapped[Project] = relationship(back_populates="transcripts")
@@ -147,10 +148,11 @@ class Task(Base):
     source_run: Mapped[ExtractionRun | None] = relationship(back_populates="tasks")
 
     @property
-    def meeting_date(self) -> datetime:
+    def meeting_date(self) -> date:
         if self.source_run and self.source_run.transcript:
-            return self.source_run.transcript.created_at
-        return self.created_at
+            transcript = self.source_run.transcript
+            return transcript.meeting_date or transcript.created_at.date()
+        return self.created_at.date()
 
     @property
     def last_updated_at(self) -> datetime:

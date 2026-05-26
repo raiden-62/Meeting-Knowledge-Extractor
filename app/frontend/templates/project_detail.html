@@ -5,7 +5,7 @@
 {% set task_updates = latest_output.get("task_updates", []) if latest_output else [] %}
 {% set agent_notes = latest_output.get("agent_notes", []) if latest_output else [] %}
 {% set confidence = latest_output.get("confidence", {}) if latest_output else {} %}
-{% set status_labels = {"todo": "к выполнению", "in_progress": "в работе", "done": "готово"} %}
+{% set status_labels = {"todo": "сделать", "in_progress": "в работе", "done": "готово"} %}
 {% set priority_labels = {"low": "низкая", "medium": "средняя", "high": "высокая"} %}
 {% set confidence_labels = {"low": "низкая", "medium": "средняя", "high": "высокая"} %}
 
@@ -27,7 +27,7 @@
     <div class="stat">
         <span>Задачи</span>
         <strong>{{ task_stats.total }}</strong>
-        <small>{{ task_stats.todo }} к выполнению · {{ task_stats.in_progress }} в работе · {{ task_stats.done }} готово</small>
+        <small>{{ task_stats.todo }} сделать · {{ task_stats.in_progress }} в работе · {{ task_stats.done }} готово</small>
     </div>
     <div class="stat">
         <span>Решения</span>
@@ -46,7 +46,7 @@
     </div>
 </section>
 
-<section class="panel">
+<section class="panel search-section">
     <form class="search-bar" method="get" action="/projects/{{ project.id }}">
         <input type="search" name="q" value="{{ filters.q }}" placeholder="Поиск по задачам, решениям, людям и стенограммам">
         <button type="submit" class="primary">Найти</button>
@@ -85,14 +85,18 @@
 <section class="layout-two">
     <div class="panel">
         <h2>Загрузка стенограммы</h2>
-        <form action="/projects/{{ project.id }}/transcripts" method="post" enctype="multipart/form-data">
+        <form action="/projects/{{ project.id }}/transcripts" method="post" enctype="multipart/form-data" data-transcript-upload>
+            <label>
+                Дата встречи
+                <input type="date" name="meeting_date" value="{{ today_date }}" required data-meeting-date-input>
+            </label>
             <label>
                 TXT/MD-файл
-                <input type="file" name="file" accept=".txt,.md,text/plain,text/markdown">
+                <input type="file" name="file" accept=".txt,.md,text/plain,text/markdown" data-transcript-file-input>
             </label>
             <label>
                 Или вставьте текст
-                <textarea name="transcript_text" rows="8" maxlength="{{ max_transcript_chars }}" placeholder="Вставьте стенограмму встречи до {{ max_transcript_chars }} символов"></textarea>
+                <textarea name="transcript_text" rows="8" maxlength="{{ max_transcript_chars }}" placeholder="Вставьте стенограмму встречи до {{ max_transcript_chars }} символов" data-transcript-text-input></textarea>
             </label>
             <button type="submit" class="primary">Сохранить стенограмму</button>
         </form>
@@ -106,7 +110,7 @@
                 <select name="transcript_id" required>
                     {% for transcript in transcripts %}
                     <option value="{{ transcript.id }}">
-                        #{{ transcript.id }} · {{ transcript.source_filename or "Вставленный текст" }} · {{ transcript.created_at.strftime("%Y-%m-%d %H:%M") }}
+                        #{{ transcript.id }} · {{ transcript.source_filename or "Вставленный текст" }} · {{ transcript.meeting_date.strftime("%d.%m.%Y") if transcript.meeting_date else transcript.created_at.strftime("%d.%m.%Y") }}
                     </option>
                     {% endfor %}
                 </select>
@@ -139,7 +143,7 @@
     </div>
 </section>
 
-<section class="panel">
+<section class="panel review-section">
     <div class="section-head">
         <div>
             <h2>Задачи с низкой уверенностью</h2>
@@ -169,7 +173,7 @@
                 {% endfor %}
             </select>
             <select name="status" aria-label="Статус">
-                <option value="todo" {% if suggestion.status == "todo" %}selected{% endif %}>к выполнению</option>
+                <option value="todo" {% if suggestion.status == "todo" %}selected{% endif %}>сделать</option>
                 <option value="in_progress" {% if suggestion.status == "in_progress" %}selected{% endif %}>в работе</option>
                 <option value="done" {% if suggestion.status == "done" %}selected{% endif %}>готово</option>
             </select>
@@ -191,7 +195,7 @@
     </div>
 </section>
 
-<section class="panel">
+<section class="panel quality-section">
     <div class="section-head">
         <div>
             <h2>Контроль качества AI</h2>
@@ -297,7 +301,7 @@
     </div>
 </section>
 
-<section class="panel">
+<section class="panel task-section">
     <div class="section-head">
         <div>
             <h2>Задачи</h2>
@@ -308,7 +312,7 @@
     <form class="filters" method="get" action="/projects/{{ project.id }}">
         <select name="status">
             <option value="">Все статусы</option>
-            <option value="todo" {% if filters.status == "todo" %}selected{% endif %}>к выполнению</option>
+            <option value="todo" {% if filters.status == "todo" %}selected{% endif %}>сделать</option>
             <option value="in_progress" {% if filters.status == "in_progress" %}selected{% endif %}>в работе</option>
             <option value="done" {% if filters.status == "done" %}selected{% endif %}>готово</option>
         </select>
@@ -338,7 +342,7 @@
                 {% endfor %}
             </select>
             <select name="status" aria-label="Статус">
-                <option value="todo">к выполнению</option>
+                <option value="todo">сделать</option>
                 <option value="in_progress">в работе</option>
                 <option value="done">готово</option>
             </select>
@@ -370,7 +374,7 @@
                     {% endfor %}
                 </select>
                 <select name="status" aria-label="Статус">
-                    <option value="todo" {% if task.status == "todo" %}selected{% endif %}>к выполнению</option>
+                    <option value="todo" {% if task.status == "todo" %}selected{% endif %}>сделать</option>
                     <option value="in_progress" {% if task.status == "in_progress" %}selected{% endif %}>в работе</option>
                     <option value="done" {% if task.status == "done" %}selected{% endif %}>готово</option>
                 </select>
@@ -379,7 +383,7 @@
                     <option value="medium" {% if task.priority == "medium" %}selected{% endif %}>средняя</option>
                     <option value="high" {% if task.priority == "high" %}selected{% endif %}>высокая</option>
                 </select>
-                <span class="task-assigned-date" title="Дата встречи: {{ task.meeting_date.strftime("%d.%m.%Y") if task.meeting_date else task.created_at.strftime("%d.%m.%Y") }}. Обновлено: {{ task.updated_at.strftime("%d.%m.%Y %H:%M") }}">Дата поручения: {{ task.created_at.strftime("%d.%m.%Y") }}</span>
+                <span class="task-assigned-date" title="Дата встречи: {{ task.meeting_date.strftime("%d.%m.%Y") if task.meeting_date else task.created_at.strftime("%d.%m.%Y") }}. Обновлено: {{ task.updated_at.strftime("%d.%m.%Y %H:%M") }}">Дата поручения: {{ task.meeting_date.strftime("%d.%m.%Y") if task.meeting_date else task.created_at.strftime("%d.%m.%Y") }}</span>
                 <div class="task-actions">
                     <button type="submit" class="primary" data-dirty-submit disabled>Сохранить</button>
                     <button type="submit" class="danger" form="delete-task-{{ task.id }}">Удалить</button>
@@ -396,17 +400,17 @@
 <section class="layout-two">
     <div class="panel">
         <h2>Ответственные</h2>
-        <form action="/projects/{{ project.id }}/people" method="post" class="inline-form">
+        <form action="/projects/{{ project.id }}/people" method="post" class="person-row person-add-row">
             <input type="text" name="name" placeholder="Имя" required>
             <input type="text" name="role" placeholder="Роль">
             <button type="submit">Добавить</button>
         </form>
         <div class="people-list">
             {% for person in people %}
-            <form action="/projects/{{ project.id }}/people/{{ person.id }}/edit" method="post" class="person-row">
+            <form action="/projects/{{ project.id }}/people/{{ person.id }}/edit" method="post" class="person-row" data-dirty-check>
                 <input type="text" name="name" value="{{ person.name }}" required>
                 <input type="text" name="role" value="{{ person.role or '' }}" placeholder="Роль">
-                <button type="submit">Сохранить</button>
+                <button type="submit" data-dirty-submit disabled>Сохранить</button>
             </form>
             {% else %}
             <div class="muted">Участники появятся после анализа или ручного добавления.</div>

@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import inspect, text
 
 from app.api.routes.extract import router as analyze_router
 from app.api.routes.mcp import router as mcp_router
@@ -14,6 +15,25 @@ from app.web.routes import router as ui_router
 def init_db() -> None:
     _ = models
     Base.metadata.create_all(bind=engine)
+    ensure_schema()
+
+
+def ensure_schema() -> None:
+    inspector = inspect(engine)
+    if "transcripts" not in inspector.get_table_names():
+        return
+
+    transcript_columns = {column["name"] for column in inspector.get_columns("transcripts")}
+    if "meeting_date" in transcript_columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE transcripts ADD COLUMN meeting_date DATE"))
+        if engine.dialect.name == "sqlite":
+            backfill_sql = "UPDATE transcripts SET meeting_date = DATE(created_at) WHERE meeting_date IS NULL"
+        else:
+            backfill_sql = "UPDATE transcripts SET meeting_date = CAST(created_at AS DATE) WHERE meeting_date IS NULL"
+        connection.execute(text(backfill_sql))
 
 
 @asynccontextmanager

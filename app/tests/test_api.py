@@ -1,5 +1,6 @@
 import json
 import re
+from datetime import date
 
 from fastapi.testclient import TestClient
 
@@ -365,6 +366,153 @@ def test_project_flow_creates_extracted_entities(monkeypatch):
     }
     assert next(task for task in tasks if task["description"] == "подготовить презентацию")["due_date"] == "2026-06-01"
     assert decisions[0]["description"] == "Решили запустить пилот CRM."
+
+
+def test_transcript_meeting_date_is_detected_and_sent_to_model(monkeypatch):
+    captured = {}
+
+    def fake_process_meeting(transcript, **kwargs):
+        captured["transcript"] = transcript
+        return sample_response()
+
+    monkeypatch.setattr(extraction_service, "process_meeting", fake_process_meeting)
+
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Meeting Date Demo", "description": "Recorded earlier"},
+    )
+    project_id = project_response.json()["id"]
+
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={"transcript_text": "15.04.2026\nBob will update roadmap."},
+    )
+
+    assert transcript_response.status_code == 200
+    assert transcript_response.json()["meeting_date"] == "2026-04-15"
+
+    transcript_id = transcript_response.json()["id"]
+    run_response = client.post(
+        f"/api/projects/{project_id}/extract",
+        data={"transcript_id": transcript_id},
+    )
+
+    assert run_response.status_code == 200
+    assert captured["transcript"].startswith("Дата встречи: 15.04.2026\n\n")
+    assert "15.04.2026\nBob will update roadmap." in captured["transcript"]
+
+
+def test_transcript_upload_meeting_date_overrides_detected_date():
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Meeting Date Override", "description": "Manual correction"},
+    )
+    project_id = project_response.json()["id"]
+
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={
+            "meeting_date": "2026-05-20",
+            "transcript_text": "15.04.2026\nBob will update roadmap.",
+        },
+    )
+
+    assert transcript_response.status_code == 200
+    assert transcript_response.json()["meeting_date"] == "2026-05-20"
+
+
+def test_transcript_meeting_date_falls_back_to_today_without_date():
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Meeting Date Fallback", "description": "No date in transcript"},
+    )
+    project_id = project_response.json()["id"]
+
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={"transcript_text": "Bob will update roadmap."},
+    )
+
+    assert transcript_response.status_code == 200
+    assert transcript_response.json()["meeting_date"] == date.today().isoformat()
+
+
+def test_transcript_meeting_date_is_detected_from_uploaded_file():
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Meeting Date File", "description": "Date in uploaded file"},
+    )
+    project_id = project_response.json()["id"]
+
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        files={
+            "file": (
+                "meeting.txt",
+                b"Meeting date: 2026-03-07\nBob will update roadmap.",
+                "text/plain",
+            )
+        },
+    )
+
+    assert transcript_response.status_code == 200
+    assert transcript_response.json()["meeting_date"] == "2026-03-07"
+
+
+def test_transcript_upload_rejects_invalid_meeting_date():
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Meeting Date Invalid", "description": "Bad date input"},
+    )
+    project_id = project_response.json()["id"]
+
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={
+            "meeting_date": "2026-31-01",
+            "transcript_text": "Bob will update roadmap.",
+        },
+    )
+
+    assert transcript_response.status_code == 400
+    assert transcript_response.json()["detail"] == "Invalid meeting_date"
+
+
+def test_extracted_tasks_use_transcript_meeting_date(monkeypatch):
+    monkeypatch.setattr(
+        extraction_service,
+        "process_meeting",
+        lambda transcript, **kwargs: sample_response(),
+    )
+
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Task Meeting Date", "description": "Task source date"},
+    )
+    project_id = project_response.json()["id"]
+
+    transcript_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={
+            "meeting_date": "2026-04-21",
+            "transcript_text": "Bob will update roadmap.",
+        },
+    )
+    transcript_id = transcript_response.json()["id"]
+
+    run_response = client.post(
+        f"/api/projects/{project_id}/extract",
+        data={"transcript_id": transcript_id},
+    )
+
+    assert run_response.status_code == 200
+    tasks = client.get(f"/api/projects/{project_id}/tasks").json()
+    assert tasks
+    assert {task["meeting_date"] for task in tasks} == {"2026-04-21"}
+
+    detail_page = client.get(f"/projects/{project_id}")
+    assert detail_page.status_code == 200
+    assert "Дата поручения: 21.04.2026" in detail_page.text
 
 
 def test_project_extraction_applies_api_task_update(monkeypatch):
