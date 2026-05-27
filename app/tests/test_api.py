@@ -785,7 +785,8 @@ def test_ui_pages_render():
     assert "Дата поручения" in detail_page.text
     assert "Дата встречи" in detail_page.text
     assert "Обновлено" in detail_page.text
-    assert "<details" not in detail_page.text
+    assert 'class="task-list-head task-filter-head"' in detail_page.text
+    assert 'class="filter-menu"' in detail_page.text
     assert "Задачи" in detail_page.text
 
 
@@ -820,6 +821,85 @@ def test_ui_task_create_without_due_date():
 
     detail_page = client.get(f"/projects/{project_id}")
     assert detail_page.status_code == 200
+
+
+def test_ui_task_filters_and_assignment_date_sort():
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Task Filters", "description": "Header controls"},
+    )
+    project_id = project_response.json()["id"]
+    anna_id = client.post(
+        f"/api/projects/{project_id}/people",
+        json={"name": "Anna"},
+    ).json()["id"]
+    bob_id = client.post(
+        f"/api/projects/{project_id}/people",
+        json={"name": "Bob"},
+    ).json()["id"]
+    older_task = client.post(
+        f"/api/projects/{project_id}/tasks",
+        json={
+            "description": "older matching task",
+            "person_id": anna_id,
+            "status": "done",
+            "priority": "high",
+        },
+    ).json()
+    newer_task = client.post(
+        f"/api/projects/{project_id}/tasks",
+        json={
+            "description": "newer matching task",
+            "person_id": anna_id,
+            "status": "done",
+            "priority": "high",
+        },
+    ).json()
+    client.post(
+        f"/api/projects/{project_id}/tasks",
+        json={
+            "description": "bob unrelated task",
+            "person_id": bob_id,
+            "status": "todo",
+            "priority": "low",
+        },
+    )
+
+    db = SessionLocal()
+    try:
+        older = db.query(models.Task).filter(models.Task.id == older_task["id"]).one()
+        newer = db.query(models.Task).filter(models.Task.id == newer_task["id"]).one()
+        older.created_at = app_now() - timedelta(days=2)
+        older.updated_at = older.created_at
+        newer.created_at = app_now()
+        newer.updated_at = newer.created_at
+        db.commit()
+    finally:
+        db.close()
+
+    filtered_page = client.get(
+        f"/projects/{project_id}",
+        params=[
+            ("person_id", str(anna_id)),
+            ("status", "done"),
+            ("priority", "high"),
+        ],
+    )
+    assert filtered_page.status_code == 200
+    assert "older matching task" in filtered_page.text
+    assert "newer matching task" in filtered_page.text
+    assert "bob unrelated task" not in filtered_page.text
+    assert 'name="person_id"' in filtered_page.text
+    assert 'name="status"' in filtered_page.text
+    assert 'name="priority"' in filtered_page.text
+    assert 'name="sort_date"' in filtered_page.text
+    assert "data-preserve-scroll" in filtered_page.text
+    assert "requestSubmit()" in filtered_page.text
+
+    ascending_page = client.get(f"/projects/{project_id}", params={"sort_date": "asc"})
+    descending_page = client.get(f"/projects/{project_id}", params={"sort_date": "desc"})
+    assert ascending_page.text.index("older matching task") < ascending_page.text.index("newer matching task")
+    assert descending_page.text.index("newer matching task") < descending_page.text.index("older matching task")
 
 
 def test_low_confidence_task_waits_for_human_review(monkeypatch):

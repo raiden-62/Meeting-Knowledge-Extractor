@@ -312,29 +312,6 @@
         </div>
     </div>
 
-    <form class="filters" method="get" action="/projects/{{ project.id }}">
-        <select name="status">
-            <option value="">Все статусы</option>
-            <option value="todo" {% if filters.status == "todo" %}selected{% endif %}>сделать</option>
-            <option value="in_progress" {% if filters.status == "in_progress" %}selected{% endif %}>в работе</option>
-            <option value="done" {% if filters.status == "done" %}selected{% endif %}>готово</option>
-        </select>
-        <select name="person_id">
-            <option value="">Все ответственные</option>
-            {% for person in people %}
-            <option value="{{ person.id }}" {% if filters.person_id|string == person.id|string %}selected{% endif %}>{{ person.name }}</option>
-            {% endfor %}
-        </select>
-        <select name="priority">
-            <option value="">Все приоритеты</option>
-            <option value="low" {% if filters.priority == "low" %}selected{% endif %}>низкая</option>
-            <option value="medium" {% if filters.priority == "medium" %}selected{% endif %}>средняя</option>
-            <option value="high" {% if filters.priority == "high" %}selected{% endif %}>высокая</option>
-        </select>
-        <button type="submit">Применить</button>
-        <a class="ghost-link" href="/projects/{{ project.id }}">Сбросить</a>
-    </form>
-
     <div class="task-workspace">
         <form action="/projects/{{ project.id }}/tasks" method="post" class="task-add-row">
             <input type="text" name="description" placeholder="Новая задача" required>
@@ -357,14 +334,43 @@
             <button type="submit" class="primary">Добавить</button>
         </form>
 
-        <div class="task-list-head">
+        <form class="task-list-head task-filter-head" method="get" action="/projects/{{ project.id }}" data-preserve-scroll>
+            {% if filters.q %}<input type="hidden" name="q" value="{{ filters.q }}">{% endif %}
             <span>Задача</span>
-            <span>Кому поручена</span>
-            <span>Статус</span>
-            <span>Важность</span>
-            <span>Дата поручения</span>
-            <span></span>
-        </div>
+            <details class="filter-menu">
+                <summary>Кому поручена</summary>
+                <div class="filter-options">
+                    {% for person in people %}
+                    <label>
+                        <input type="checkbox" name="person_id" value="{{ person.id }}" {% if person.id in filters.person_ids %}checked{% endif %} onchange="this.form.requestSubmit()">
+                        {{ person.name }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </details>
+            <details class="filter-menu">
+                <summary>Статус</summary>
+                <div class="filter-options">
+                    <label><input type="checkbox" name="status" value="todo" {% if "todo" in filters.statuses %}checked{% endif %} onchange="this.form.requestSubmit()"> сделать</label>
+                    <label><input type="checkbox" name="status" value="in_progress" {% if "in_progress" in filters.statuses %}checked{% endif %} onchange="this.form.requestSubmit()"> в работе</label>
+                    <label><input type="checkbox" name="status" value="done" {% if "done" in filters.statuses %}checked{% endif %} onchange="this.form.requestSubmit()"> готово</label>
+                </div>
+            </details>
+            <details class="filter-menu">
+                <summary>Важность</summary>
+                <div class="filter-options">
+                    <label><input type="checkbox" name="priority" value="low" {% if "low" in filters.priorities %}checked{% endif %} onchange="this.form.requestSubmit()"> низкая</label>
+                    <label><input type="checkbox" name="priority" value="medium" {% if "medium" in filters.priorities %}checked{% endif %} onchange="this.form.requestSubmit()"> средняя</label>
+                    <label><input type="checkbox" name="priority" value="high" {% if "high" in filters.priorities %}checked{% endif %} onchange="this.form.requestSubmit()"> высокая</label>
+                </div>
+            </details>
+            <div class="date-sort">
+                <span>Дата поручения</span>
+                <button type="submit" name="sort_date" value="desc" class="{% if filters.sort_date == 'desc' %}active{% endif %}" aria-label="Сначала новые">↓</button>
+                <button type="submit" name="sort_date" value="asc" class="{% if filters.sort_date == 'asc' %}active{% endif %}" aria-label="Сначала старые">↑</button>
+            </div>
+            <a class="ghost-link" href="/projects/{{ project.id }}{% if filters.q %}?q={{ filters.q }}{% endif %}">Сбросить</a>
+        </form>
 
         <div class="task-list">
         {% for task in tasks %}

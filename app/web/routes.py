@@ -284,10 +284,8 @@ def remove_project(project_id: int, db: Session = Depends(get_db)):
 def project_detail(
     request: Request,
     project_id: int,
-    status: str | None = None,
-    person_id: str | None = None,
-    priority: str | None = None,
     q: str | None = None,
+    sort_date: str = "desc",
     db: Session = Depends(get_db),
 ):
     project = db.query(models.Project).filter(models.Project.id == project_id).first()
@@ -328,15 +326,40 @@ def project_detail(
         .order_by(models.TaskSuggestion.created_at.desc())
         .all()
     )
+    query_params = request.query_params
+    selected_statuses = [
+        validate_status(value)
+        for value in query_params.getlist("status")
+        if value.strip()
+    ]
+    selected_priorities = [
+        validate_priority(value)
+        for value in query_params.getlist("priority")
+        if value.strip()
+    ]
+    selected_person_ids = [
+        parsed
+        for parsed in (
+            parse_optional_int(value, "person_id")
+            for value in query_params.getlist("person_id")
+            if value.strip()
+        )
+        if parsed is not None
+    ]
+    sort_date = sort_date if sort_date in {"asc", "desc"} else "desc"
+
     tasks_query = db.query(models.Task).filter(models.Task.project_id == project_id)
-    selected_person_id = parse_optional_int(person_id, "person_id")
-    if status:
-        tasks_query = tasks_query.filter(models.Task.status == status)
-    if selected_person_id:
-        tasks_query = tasks_query.filter(models.Task.person_id == selected_person_id)
-    if priority:
-        tasks_query = tasks_query.filter(models.Task.priority == priority)
-    tasks = tasks_query.order_by(models.Task.created_at.desc()).all()
+    if selected_statuses:
+        tasks_query = tasks_query.filter(models.Task.status.in_(selected_statuses))
+    if selected_person_ids:
+        tasks_query = tasks_query.filter(models.Task.person_id.in_(selected_person_ids))
+    if selected_priorities:
+        tasks_query = tasks_query.filter(models.Task.priority.in_(selected_priorities))
+    tasks = tasks_query.all()
+    tasks.sort(
+        key=lambda task: (task.meeting_date, task.created_at, task.id),
+        reverse=sort_date == "desc",
+    )
     decisions = (
         db.query(models.Decision)
         .filter(models.Decision.project_id == project_id)
@@ -370,10 +393,11 @@ def project_detail(
             "search": find_project_matches(project_id, q, db),
             "task_stats": task_stats,
             "filters": {
-                "status": status or "",
-                "person_id": selected_person_id or "",
-                "priority": priority or "",
+                "statuses": selected_statuses,
+                "person_ids": selected_person_ids,
+                "priorities": selected_priorities,
                 "q": q or "",
+                "sort_date": sort_date,
             },
             "today_date": app_now().date().isoformat(),
         },

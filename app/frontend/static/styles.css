@@ -642,6 +642,100 @@ button:disabled {
     text-transform: uppercase;
 }
 
+.task-filter-head {
+    align-items: start;
+    margin-bottom: 7px;
+}
+
+.filter-menu {
+    position: relative;
+    min-width: 0;
+}
+
+.filter-menu summary {
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    list-style: none;
+}
+
+.filter-menu summary::-webkit-details-marker {
+    display: none;
+}
+
+.filter-menu summary::after {
+    content: "⌄";
+    margin-left: 6px;
+    color: var(--accent);
+}
+
+.filter-options {
+    position: absolute;
+    top: 36px;
+    left: 0;
+    z-index: 5;
+    display: grid;
+    gap: 7px;
+    width: max-content;
+    min-width: 170px;
+    max-width: 280px;
+    padding: 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: white;
+    box-shadow: var(--shadow);
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.filter-options label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.filter-options input {
+    width: auto;
+    min-height: 0;
+}
+
+.date-sort {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 34px;
+}
+
+.date-sort button {
+    width: 30px;
+    min-height: 30px;
+    padding: 0;
+    border-color: var(--border);
+    background: var(--surface);
+    color: var(--muted);
+}
+
+.date-sort button.active,
+.date-sort button:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+    filter: none;
+}
+
+.task-filter-head .ghost-link {
+    min-height: 34px;
+    padding: 5px 9px;
+    justify-self: stretch;
+}
+
 .review-meta span,
 .review-meta small {
     overflow: hidden;

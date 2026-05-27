@@ -149,11 +149,14 @@
 
             document.addEventListener("submit", (event) => {
                 const form = event.target;
-                if (form instanceof HTMLFormElement && form.method.toLowerCase() === "post") {
-                    if (form.matches("[data-dirty-check]") && snapshot(form) === form.dataset.initialSnapshot) {
-                        event.preventDefault();
-                        return;
-                    }
+                if (!(form instanceof HTMLFormElement)) {
+                    return;
+                }
+                if (form.matches("[data-dirty-check]") && snapshot(form) === form.dataset.initialSnapshot) {
+                    event.preventDefault();
+                    return;
+                }
+                if (form.method.toLowerCase() === "post" || form.matches("[data-preserve-scroll]")) {
                     sessionStorage.setItem(key, String(window.scrollY));
                 }
             });
