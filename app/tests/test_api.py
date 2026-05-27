@@ -1,15 +1,42 @@
 import json
 import re
-from datetime import date
+from datetime import timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, init_db
 from app.core.config import MAX_TRANSCRIPT_CHARS
+from app.core.time import app_now
+from app.db import models
+from app.db.database import SessionLocal
 from app.integrations import llm_api
 from app.services import extraction_service, llm_service, meeting_pipeline
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def cleanup_projects_created_by_test():
+    init_db()
+    db = SessionLocal()
+    try:
+        existing_project_ids = {project_id for (project_id,) in db.query(models.Project.id).all()}
+    finally:
+        db.close()
+
+    yield
+
+    db = SessionLocal()
+    try:
+        query = db.query(models.Project)
+        if existing_project_ids:
+            query = query.filter(~models.Project.id.in_(existing_project_ids))
+        for project in query.all():
+            db.delete(project)
+        db.commit()
+    finally:
+        db.close()
 
 
 def sample_response():
@@ -55,6 +82,10 @@ def test_health():
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_app_now_uses_moscow_timezone():
+    assert app_now().utcoffset() == timedelta(hours=3)
 
 
 def test_analyze_returns_provider_error_without_llm(monkeypatch):
@@ -368,6 +399,51 @@ def test_project_flow_creates_extracted_entities(monkeypatch):
     assert decisions[0]["description"] == "Решили запустить пилот CRM."
 
 
+def test_project_can_be_deleted_from_api_and_web():
+    api_project = client.post(
+        "/api/projects",
+        json={"name": "Delete API Demo", "description": "Temporary project"},
+    ).json()
+    api_project_id = api_project["id"]
+    person_id = client.post(
+        f"/api/projects/{api_project_id}/people",
+        json={"name": "Mia"},
+    ).json()["id"]
+    client.post(
+        f"/api/projects/{api_project_id}/tasks",
+        json={
+            "description": "temporary task",
+            "person_id": person_id,
+            "status": "todo",
+            "priority": "medium",
+        },
+    )
+
+    delete_response = client.delete(f"/api/projects/{api_project_id}")
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"status": "deleted", "id": api_project_id}
+    assert client.get(f"/api/projects/{api_project_id}").status_code == 404
+
+    web_project = client.post(
+        "/api/projects",
+        json={"name": "Delete Web Demo", "description": "Temporary project"},
+    ).json()
+    web_project_id = web_project["id"]
+
+    detail_page = client.get(f"/projects/{web_project_id}")
+    assert detail_page.status_code == 200
+    assert "Удалить проект" in detail_page.text
+    assert f"/projects/{web_project_id}/delete" in detail_page.text
+
+    web_delete_response = client.post(
+        f"/projects/{web_project_id}/delete",
+        follow_redirects=False,
+    )
+    assert web_delete_response.status_code == 303
+    assert web_delete_response.headers["location"] == "/projects"
+    assert client.get(f"/api/projects/{web_project_id}").status_code == 404
+
+
 def test_transcript_meeting_date_is_detected_and_sent_to_model(monkeypatch):
     captured = {}
 
@@ -434,7 +510,7 @@ def test_transcript_meeting_date_falls_back_to_today_without_date():
     )
 
     assert transcript_response.status_code == 200
-    assert transcript_response.json()["meeting_date"] == date.today().isoformat()
+    assert transcript_response.json()["meeting_date"] == app_now().date().isoformat()
 
 
 def test_transcript_meeting_date_is_detected_from_uploaded_file():

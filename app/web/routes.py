@@ -6,12 +6,13 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.core.config import LLM_PROVIDER, LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
-from app.core.time import utc_now
+from app.core.time import app_now
 from app.db import models
 from app.db.database import get_db
 from app.services.agents import TaskLifecycleAgent
 from app.services.extraction_service import run_extraction
 from app.services.llm_service import LLMProviderError
+from app.services.project_service import delete_project
 from app.services.project_validation import (
     clean_optional_text,
     clean_required_text,
@@ -272,6 +273,13 @@ def edit_project(
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
 
+@router.post("/projects/{project_id}/delete")
+def remove_project(project_id: int, db: Session = Depends(get_db)):
+    if not delete_project(db, project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return RedirectResponse(url="/projects", status_code=303)
+
+
 @router.get("/projects/{project_id}", response_class=HTMLResponse)
 def project_detail(
     request: Request,
@@ -367,7 +375,7 @@ def project_detail(
                 "priority": priority or "",
                 "q": q or "",
             },
-            "today_date": utc_now().date().isoformat(),
+            "today_date": app_now().date().isoformat(),
         },
     )
 
@@ -595,7 +603,7 @@ def accept_task_suggestion(
     suggestion.priority = cleaned_priority
     suggestion.due_date = parsed_due_date
     suggestion.review_status = "accepted"
-    suggestion.reviewed_at = utc_now()
+    suggestion.reviewed_at = app_now()
 
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
@@ -620,7 +628,7 @@ def reject_task_suggestion(
         raise HTTPException(status_code=404, detail="Task suggestion not found")
 
     suggestion.review_status = "rejected"
-    suggestion.reviewed_at = utc_now()
+    suggestion.reviewed_at = app_now()
     db.commit()
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 

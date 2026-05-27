@@ -3,7 +3,7 @@ from datetime import date, datetime
 from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.time import utc_now
+from app.core.time import app_now
 from app.db.database import Base
 
 
@@ -13,11 +13,11 @@ class Project(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=app_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=utc_now,
-        onupdate=utc_now,
+        default=app_now,
+        onupdate=app_now,
     )
 
     transcripts: Mapped[list["Transcript"]] = relationship(
@@ -54,8 +54,8 @@ class ProjectMemory(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=utc_now,
-        onupdate=utc_now,
+        default=app_now,
+        onupdate=app_now,
     )
 
     project: Mapped[Project] = relationship(back_populates="memory")
@@ -69,7 +69,7 @@ class Transcript(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     source_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     meeting_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=app_now)
 
     project: Mapped[Project] = relationship(back_populates="transcripts")
     runs: Mapped[list["ExtractionRun"]] = relationship(
@@ -91,7 +91,7 @@ class ExtractionRun(Base):
     status: Mapped[str] = mapped_column(String(40), default="completed")
     response_time_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     raw_response: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=app_now)
 
     transcript: Mapped[Transcript] = relationship(back_populates="runs")
     tasks: Mapped[list["Task"]] = relationship(
@@ -115,11 +115,11 @@ class Person(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     role: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=app_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=utc_now,
-        onupdate=utc_now,
+        default=app_now,
+        onupdate=app_now,
     )
 
     project: Mapped[Project] = relationship(back_populates="people")
@@ -137,11 +137,11 @@ class Task(Base):
     status: Mapped[str] = mapped_column(String(40), default="todo")
     priority: Mapped[str] = mapped_column(String(40), default="medium")
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=app_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=utc_now,
-        onupdate=utc_now,
+        default=app_now,
+        onupdate=app_now,
     )
 
     project: Mapped[Project] = relationship(back_populates="tasks")
@@ -176,7 +176,7 @@ class TaskSuggestion(Base):
     confidence_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
     confidence_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_status: Mapped[str] = mapped_column(String(20), default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=app_now)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     project: Mapped[Project] = relationship(back_populates="task_suggestions")
@@ -190,7 +190,7 @@ class Decision(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), nullable=False)
     source_run_id: Mapped[int | None] = mapped_column(ForeignKey("extraction_runs.id"))
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=app_now)
 
     project: Mapped[Project] = relationship(back_populates="decisions")
     source_run: Mapped[ExtractionRun | None] = relationship(back_populates="decisions")

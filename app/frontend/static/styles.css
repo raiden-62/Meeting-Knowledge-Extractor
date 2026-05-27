@@ -94,6 +94,14 @@ a {
     flex-wrap: wrap;
 }
 
+.inline-delete-form {
+    display: inline-flex;
+}
+
+.inline-delete-form button {
+    width: auto;
+}
+
 .site-nav a,
 .ghost-link {
     min-height: 36px;
@@ -481,6 +489,7 @@ button:disabled {
 .task-row {
     min-height: 50px;
     padding: 7px 8px;
+    align-items: start;
     border: 1px solid var(--border);
     border-left: 4px solid var(--accent);
     border-radius: var(--radius);
@@ -494,10 +503,13 @@ button:disabled {
 
 .task-title-input {
     min-width: 0;
-    overflow: hidden;
+    min-height: 52px;
     font-weight: 650;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.35;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    resize: none;
+    white-space: pre-wrap;
 }
 
 .task-assigned-date {

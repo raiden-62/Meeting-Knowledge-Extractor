@@ -19,6 +19,7 @@ from app.schemas.schemas import (
 )
 from app.services.extraction_service import run_extraction
 from app.services.llm_service import LLMProviderError
+from app.services.project_service import delete_project
 from app.services.project_validation import (
     clean_required_text,
     read_transcript_upload,
@@ -52,6 +53,13 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
+
+
+@router.delete("/{project_id}")
+def remove_project(project_id: int, db: Session = Depends(get_db)):
+    if not delete_project(db, project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"status": "deleted", "id": project_id}
 
 
 @router.post("/{project_id}/transcripts", response_model=TranscriptRead)

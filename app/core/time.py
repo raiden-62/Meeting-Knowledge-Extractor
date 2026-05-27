@@ -1,5 +1,7 @@
-from datetime import UTC, datetime
+from datetime import datetime, timedelta, timezone
+
+APP_TIMEZONE = timezone(timedelta(hours=3), "UTC+03:00")
 
 
-def utc_now() -> datetime:
-    return datetime.now(UTC)
+def app_now() -> datetime:
+    return datetime.now(APP_TIMEZONE)

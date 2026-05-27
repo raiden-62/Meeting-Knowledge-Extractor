@@ -57,6 +57,16 @@
                 update();
             });
 
+            const autosizeTextarea = (textarea) => {
+                textarea.style.height = "auto";
+                textarea.style.height = `${textarea.scrollHeight}px`;
+            };
+
+            document.querySelectorAll("textarea[data-autosize]").forEach((textarea) => {
+                autosizeTextarea(textarea);
+                textarea.addEventListener("input", () => autosizeTextarea(textarea));
+            });
+
             const toIsoDate = (year, month, day) => {
                 const parsed = new Date(Number(year), Number(month) - 1, Number(day));
                 if (

@@ -20,6 +20,9 @@
         <a class="ghost-link" href="/projects/{{ project.id }}/export.md">Экспорт MD</a>
         <a class="ghost-link" href="/projects/{{ project.id }}/export.txt">Экспорт TXT</a>
         <a class="ghost-link" href="/projects">Назад к проектам</a>
+        <form action="/projects/{{ project.id }}/delete" method="post" class="inline-delete-form" onsubmit="return confirm('Удалить проект и все связанные данные?');">
+            <button type="submit" class="danger">Удалить проект</button>
+        </form>
     </div>
 </section>
 
@@ -366,7 +369,7 @@
         <div class="task-list">
         {% for task in tasks %}
             <form id="edit-task-{{ task.id }}" action="/projects/{{ project.id }}/tasks/{{ task.id }}/edit" method="post" class="task-row" data-dirty-check>
-                <input type="text" name="description" class="task-title-input" value="{{ task.description }}" title="{{ task.description }}" required>
+                <textarea name="description" class="task-title-input" rows="1" title="{{ task.description }}" required data-autosize>{{ task.description }}</textarea>
                 <select name="person_id" aria-label="Кому поручена">
                     <option value="">Без ответственного</option>
                     {% for person in people %}
