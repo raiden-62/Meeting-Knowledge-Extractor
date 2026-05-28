@@ -100,10 +100,17 @@ def parse_json_response(text: str) -> dict | None:
 def default_evaluation() -> dict:
     return {
         "missed_tasks": 0,
+        "missed_task_updates": 0,
         "missed_decisions": 0,
-        "misattributed_tasks": 0,
+        "missed_risks": 0,
+        "assignee_errors": 0,
+        "status_errors": 0,
+        "priority_errors": 0,
+        "due_date_errors": 0,
+        "hallucinated_items": 0,
         "clarity_rating": 0,
-        "overall_score": 0
+        "overall_score": 0,
+        "comments": "",
     }
 
 def evaluate_response(
@@ -128,10 +135,17 @@ def evaluate_response(
 
     required_keys = {
         "missed_tasks",
+        "missed_task_updates",
         "missed_decisions",
-        "misattributed_tasks",
+        "missed_risks",
+        "assignee_errors",
+        "status_errors",
+        "priority_errors",
+        "due_date_errors",
+        "hallucinated_items",
         "clarity_rating",
-        "overall_score"
+        "overall_score",
+        "comments",
     }
 
     if not required_keys.issubset(parsed.keys()):

@@ -863,6 +863,14 @@ def test_ui_task_filters_and_assignment_date_sort():
             "priority": "low",
         },
     )
+    client.post(
+        f"/api/projects/{project_id}/tasks",
+        json={
+            "description": "unassigned task",
+            "status": "todo",
+            "priority": "medium",
+        },
+    )
 
     db = SessionLocal()
     try:
@@ -888,12 +896,33 @@ def test_ui_task_filters_and_assignment_date_sort():
     assert "older matching task" in filtered_page.text
     assert "newer matching task" in filtered_page.text
     assert "bob unrelated task" not in filtered_page.text
+    assert "unassigned task" not in filtered_page.text
     assert 'name="person_id"' in filtered_page.text
+    assert 'value="no_assignee"' in filtered_page.text
     assert 'name="status"' in filtered_page.text
     assert 'name="priority"' in filtered_page.text
     assert 'name="sort_date"' in filtered_page.text
     assert "data-preserve-scroll" in filtered_page.text
     assert "requestSubmit()" in filtered_page.text
+
+    unassigned_page = client.get(
+        f"/projects/{project_id}",
+        params={"person_id": "no_assignee"},
+    )
+    assert unassigned_page.status_code == 200
+    assert "unassigned task" in unassigned_page.text
+    assert "older matching task" not in unassigned_page.text
+    assert "bob unrelated task" not in unassigned_page.text
+
+    combined_page = client.get(
+        f"/projects/{project_id}",
+        params=[("person_id", str(anna_id)), ("person_id", "no_assignee")],
+    )
+    assert combined_page.status_code == 200
+    assert "older matching task" in combined_page.text
+    assert "newer matching task" in combined_page.text
+    assert "unassigned task" in combined_page.text
+    assert "bob unrelated task" not in combined_page.text
 
     ascending_page = client.get(f"/projects/{project_id}", params={"sort_date": "asc"})
     descending_page = client.get(f"/projects/{project_id}", params={"sort_date": "desc"})

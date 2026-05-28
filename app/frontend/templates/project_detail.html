@@ -296,6 +296,10 @@
             <details class="filter-menu">
                 <summary>Кому поручена</summary>
                 <div class="filter-options">
+                    <label>
+                        <input type="checkbox" name="person_id" value="no_assignee" {% if filters.include_no_assignee %}checked{% endif %} onchange="this.form.requestSubmit()">
+                        Без ответственного
+                    </label>
                     {% for person in people %}
                     <label>
                         <input type="checkbox" name="person_id" value="{{ person.id }}" {% if person.id in filters.person_ids %}checked{% endif %} onchange="this.form.requestSubmit()">

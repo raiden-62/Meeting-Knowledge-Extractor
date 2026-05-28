@@ -3,6 +3,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import LLM_PROVIDER, LLM_PROVIDERS, MAX_TRANSCRIPT_CHARS
@@ -35,6 +36,7 @@ templates.env.globals["llm_providers"] = LLM_PROVIDERS
 
 STATUS_LABELS = {"todo": "сделать", "in_progress": "в работе", "done": "готово"}
 PRIORITY_LABELS = {"low": "низкая", "medium": "средняя", "high": "высокая"}
+NO_ASSIGNEE_FILTER = "no_assignee"
 
 
 def accepted_task_from_review(
@@ -337,12 +339,18 @@ def project_detail(
         for value in query_params.getlist("priority")
         if value.strip()
     ]
+    selected_person_values = [
+        value.strip()
+        for value in query_params.getlist("person_id")
+        if value.strip()
+    ]
+    include_no_assignee = NO_ASSIGNEE_FILTER in selected_person_values
     selected_person_ids = [
         parsed
         for parsed in (
             parse_optional_int(value, "person_id")
-            for value in query_params.getlist("person_id")
-            if value.strip()
+            for value in selected_person_values
+            if value != NO_ASSIGNEE_FILTER
         )
         if parsed is not None
     ]
@@ -351,8 +359,14 @@ def project_detail(
     tasks_query = db.query(models.Task).filter(models.Task.project_id == project_id)
     if selected_statuses:
         tasks_query = tasks_query.filter(models.Task.status.in_(selected_statuses))
-    if selected_person_ids:
+    if selected_person_ids and include_no_assignee:
+        tasks_query = tasks_query.filter(
+            or_(models.Task.person_id.in_(selected_person_ids), models.Task.person_id.is_(None))
+        )
+    elif selected_person_ids:
         tasks_query = tasks_query.filter(models.Task.person_id.in_(selected_person_ids))
+    elif include_no_assignee:
+        tasks_query = tasks_query.filter(models.Task.person_id.is_(None))
     if selected_priorities:
         tasks_query = tasks_query.filter(models.Task.priority.in_(selected_priorities))
     tasks = tasks_query.all()
@@ -395,6 +409,7 @@ def project_detail(
             "filters": {
                 "statuses": selected_statuses,
                 "person_ids": selected_person_ids,
+                "include_no_assignee": include_no_assignee,
                 "priorities": selected_priorities,
                 "q": q or "",
                 "sort_date": sort_date,

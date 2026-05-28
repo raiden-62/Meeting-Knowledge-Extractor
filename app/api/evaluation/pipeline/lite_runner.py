@@ -1,12 +1,14 @@
-import time
+from app.api.evaluation.pipeline.runner import PipelineRunOptions, run_pipeline
 
-from app.services.meeting_pipeline import process_meeting
 
-def run_lite_pipeline(transcript: str):
-    start = time.time()
+def run_lite_pipeline(
+    transcript: str,
+    provider: str | None = None,
+    model: str | None = None,
+):
+    result = run_pipeline(
+        transcript,
+        PipelineRunOptions(provider=provider, model=model),
+    )
 
-    result = process_meeting(transcript)
-
-    elapsed = time.time() - start
-
-    return result, elapsed
+    return result.response, result.response_time_seconds
