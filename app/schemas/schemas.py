@@ -39,23 +39,6 @@ class ExtractedTask(BaseModel):
     due_date: Optional[str] = None
 
 
-class ConfidenceItem(BaseModel):
-    kind: str = ""
-    index: int = 0
-    description: str = ""
-    level: str = "medium"
-    score: Optional[float] = None
-    flags: List[str] = Field(default_factory=list)
-    reason: Optional[str] = None
-
-
-class ConfidenceReport(BaseModel):
-    tasks: List[ConfidenceItem] = Field(default_factory=list)
-    task_updates: List[ConfidenceItem] = Field(default_factory=list)
-    decisions: List[ConfidenceItem] = Field(default_factory=list)
-    risks: List[ConfidenceItem] = Field(default_factory=list)
-
-
 class ExtractionMetrics(BaseModel):
     transcript_chars: int = 0
     llm_transcript_chars: int = 0
@@ -64,7 +47,6 @@ class ExtractionMetrics(BaseModel):
     people_count: int = 0
     risks_count: int = 0
     task_updates_count: int = 0
-    low_confidence_count: int = 0
     parallel_chunks_count: int = 0
     parallel_workers: int = 0
     response_time_seconds: Optional[float] = None
@@ -86,7 +68,6 @@ class AnalyzeResponse(BaseModel):
     task_updates: List[ExtractedTaskUpdate] = Field(default_factory=list)
     people: Dict[str, List[str]] = Field(default_factory=dict)
     risks: List[str] = Field(default_factory=list)
-    confidence: ConfidenceReport = Field(default_factory=ConfidenceReport)
     metrics: ExtractionMetrics = Field(default_factory=ExtractionMetrics)
     agent_notes: List[str] = Field(default_factory=list)
     source: str = "fallback"

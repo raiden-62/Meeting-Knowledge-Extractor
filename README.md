@@ -209,7 +209,6 @@ python -m pytest
 - `people_count` - число ответственных;
 - `risks_count` - число рисков;
 - `task_updates_count` - число обновлений существующих задач;
-- `low_confidence_count` - сколько задач, обновлений, решений и рисков требуют внимания клиента;
 - `parallel_chunks_count` - сколько чанков использовал ParallelAgent для длинной стенограммы;
 - `parallel_workers` - сколько параллельных LLM-запросов использовалось;
 - `response_time_seconds` - время обработки.

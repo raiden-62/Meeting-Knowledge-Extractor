@@ -253,7 +253,6 @@ def test_confidence_marks_missing_assignee_as_low():
     confidence = normalized["confidence"]["tasks"][0]
     assert confidence["level"] == "low"
     assert "ответственный не найден" in confidence["flags"]
-    assert normalized["metrics"]["low_confidence_count"] == 1
 
 
 def test_long_transcript_uses_parallel_chunks(monkeypatch):
@@ -925,9 +924,6 @@ def test_low_confidence_task_waits_for_human_review(monkeypatch):
                 "reason": "speaker was unclear",
             }
         ],
-        "task_updates": [],
-        "decisions": [],
-        "risks": [],
     }
 
     monkeypatch.setattr(
@@ -963,6 +959,7 @@ def test_low_confidence_task_waits_for_human_review(monkeypatch):
     detail_page = client.get(f"/projects/{project_id}")
     assert detail_page.status_code == 200
     assert "Задачи с низкой уверенностью" in detail_page.text
+    assert "Контроль качества AI" not in detail_page.text
     assert "confirm vendor budget" in detail_page.text
 
     match = re.search(r"/task-suggestions/(\d+)/accept", detail_page.text)

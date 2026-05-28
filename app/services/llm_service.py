@@ -441,70 +441,21 @@ def _task_confidence(item: Any, task: dict[str, str | None], index: int) -> dict
     }
 
 
-def _task_update_confidence(item: Any, update: dict[str, str | int | None], index: int) -> dict[str, Any]:
-    score = _confidence_score(item)
-    flags: list[str] = []
-    if not update.get("task_id"):
-        flags.append("связь с задачей неясна")
-    if not update.get("assignee"):
-        flags.append("ответственный не найден")
-    if not update.get("status"):
-        flags.append("статус неясен")
-
-    level = _confidence_level(score, _confidence_text(item))
-    if flags and level == "high":
-        level = "medium"
-    if len(flags) >= 2:
-        level = "low"
-
-    return {
-        "kind": "task_update",
-        "index": index,
-        "description": update.get("description") or "",
-        "level": level,
-        "score": score,
-        "flags": _unique_strings(flags or ["обновление статуса уверенное"]),
-        "reason": _confidence_reason(item),
-    }
-
-
-def _text_confidence(item: Any, kind: str, index: int) -> dict[str, Any]:
-    score = _confidence_score(item)
-    description = _clean_text(item.get("description") if isinstance(item, dict) else item)
-    level = _confidence_level(score, _confidence_text(item))
-    return {
-        "kind": kind,
-        "index": index,
-        "description": description,
-        "level": level,
-        "score": score,
-        "flags": ["уверенно найдено"] if level == "high" else ["требует внимания"],
-        "reason": _confidence_reason(item),
-    }
-
-
 def _normalize_confidence(
     parsed: dict[str, Any],
     raw_tasks: list[Any],
     tasks: list[dict[str, str | None]],
-    raw_task_updates: list[Any],
-    task_updates: list[dict[str, str | int | None]],
 ) -> dict[str, list[dict[str, Any]]]:
     incoming = parsed.get("confidence", {})
-    result: dict[str, list[dict[str, Any]]] = {
-        "tasks": [],
-        "task_updates": [],
-        "decisions": [],
-        "risks": [],
-    }
+    result: dict[str, list[dict[str, Any]]] = {"tasks": []}
     if isinstance(incoming, dict):
-        for key in result:
-            items = incoming.get(key, [])
-            if isinstance(items, list):
-                for index, item in enumerate(items):
-                    if isinstance(item, dict):
-                        normalized = {
-                            "kind": _clean_text(item.get("kind") or key.rstrip("s")),
+        items = incoming.get("tasks", [])
+        if isinstance(items, list):
+            for index, item in enumerate(items):
+                if isinstance(item, dict):
+                    result["tasks"].append(
+                        {
+                            "kind": _clean_text(item.get("kind") or "task"),
                             "index": _parse_optional_int(item.get("index")) or index,
                             "description": _clean_text(item.get("description")),
                             "level": _confidence_level(_confidence_score(item), _confidence_text(item)),
@@ -512,28 +463,13 @@ def _normalize_confidence(
                             "flags": _unique_strings(item.get("flags", []) if isinstance(item.get("flags"), list) else []),
                             "reason": _confidence_reason(item),
                         }
-                        result[key].append(normalized)
+                    )
 
     if not result["tasks"]:
         result["tasks"] = [
             _task_confidence(raw_tasks[index] if index < len(raw_tasks) else {}, task, index)
             for index, task in enumerate(tasks)
         ]
-    if not result["task_updates"]:
-        result["task_updates"] = [
-            _task_update_confidence(
-                raw_task_updates[index] if index < len(raw_task_updates) else {},
-                update,
-                index,
-            )
-            for index, update in enumerate(task_updates)
-        ]
-    if not result["decisions"]:
-        decisions = parsed.get("decisions", [])
-        result["decisions"] = [_text_confidence(item, "decision", index) for index, item in enumerate(decisions if isinstance(decisions, list) else [])]
-    if not result["risks"]:
-        risks = parsed.get("risks", [])
-        result["risks"] = [_text_confidence(item, "risk", index) for index, item in enumerate(risks if isinstance(risks, list) else [])]
 
     return result
 
@@ -671,16 +607,8 @@ def normalize_response(
         parsed,
         raw_tasks,
         tasks,
-        raw_task_updates,
-        task_updates,
     )
     metrics["task_updates_count"] = len(task_updates)
-    metrics["low_confidence_count"] = sum(
-        1
-        for key in ("tasks", "task_updates", "decisions", "risks")
-        for item in confidence.get(key, [])
-        if item.get("level") in {"low", "medium"}
-    )
 
     return {
         "summary": summary,
@@ -889,12 +817,7 @@ def build_prompt(transcript: str, memory_context: str | None = None) -> str:
   "confidence": {{
     "tasks": [
       {{"index": 0, "description": "...", "level": "high", "score": 0.92, "flags": ["задача точно найдена"], "reason": "..."}}
-    ],
-    "task_updates": [
-      {{"index": 0, "description": "...", "level": "medium", "score": 0.7, "flags": ["статус неясен"], "reason": "..."}}
-    ],
-    "decisions": [],
-    "risks": []
+    ]
   }},
   "agent_notes": ["ContextAgent: ...", "LifecycleAgent: ..."],
   "metrics": {{
@@ -1101,7 +1024,7 @@ def _merge_without_llm(
         "people": {},
         "risks": [],
         "agent_notes": [],
-        "confidence": {"tasks": [], "task_updates": [], "decisions": [], "risks": []},
+        "confidence": {"tasks": []},
         "metrics": {},
     }
     for output in chunk_outputs:

@@ -45,6 +45,7 @@ def run_extraction(
         infer_updates=False,
     )
     memory_agent.update_summary(db, transcript, raw_output)
+    raw_output.pop("confidence", None)
     run.raw_response = raw_output
 
     return run

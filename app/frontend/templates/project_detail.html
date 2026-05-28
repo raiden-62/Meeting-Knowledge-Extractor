@@ -4,7 +4,6 @@
 {% set risks = latest_output.get("risks", []) if latest_output else [] %}
 {% set task_updates = latest_output.get("task_updates", []) if latest_output else [] %}
 {% set agent_notes = latest_output.get("agent_notes", []) if latest_output else [] %}
-{% set confidence = latest_output.get("confidence", {}) if latest_output else {} %}
 {% set status_labels = {"todo": "сделать", "in_progress": "в работе", "done": "готово"} %}
 {% set priority_labels = {"low": "низкая", "medium": "средняя", "high": "высокая"} %}
 {% set confidence_labels = {"low": "низкая", "medium": "средняя", "high": "высокая"} %}
@@ -137,7 +136,6 @@
                 <span>{{ metrics.get("decisions_count", 0) }} решений</span>
                 <span>{{ metrics.get("risks_count", 0) }} рисков</span>
                 <span>{{ metrics.get("task_updates_count", 0) }} обновлений</span>
-                <span>{{ metrics.get("low_confidence_count", 0) }} спорных</span>
                 {% if metrics.get("parallel_chunks_count", 0) %}
                 <span>{{ metrics.get("parallel_chunks_count", 0) }} чанков</span>
                 {% endif %}
@@ -195,48 +193,6 @@
         {% else %}
         <div class="empty">Нет задач с низкой уверенностью.</div>
         {% endfor %}
-    </div>
-</section>
-
-<section class="panel quality-section">
-    <div class="section-head">
-        <div>
-            <h2>Контроль качества AI</h2>
-            <p class="muted">Сомнительные задачи, статусы, решения, риски и ответственные из последнего анализа.</p>
-        </div>
-    </div>
-    <div class="confidence-list">
-        {% for item in confidence.get("tasks", []) if item.get("level") != "high" %}
-        <div class="confidence-row {{ item.get("level", "medium") }}">
-            <strong>Задача · {{ confidence_labels.get(item.get("level", "medium"), item.get("level", "medium")) }}</strong>
-            <span>{{ item.get("description", "") }}</span>
-            <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
-        </div>
-        {% endfor %}
-        {% for item in confidence.get("task_updates", []) if item.get("level") != "high" %}
-        <div class="confidence-row {{ item.get("level", "medium") }}">
-            <strong>Статус · {{ confidence_labels.get(item.get("level", "medium"), item.get("level", "medium")) }}</strong>
-            <span>{{ item.get("description", "") }}</span>
-            <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
-        </div>
-        {% endfor %}
-        {% for item in confidence.get("decisions", []) if item.get("level") != "high" %}
-        <div class="confidence-row {{ item.get("level", "medium") }}">
-            <strong>Решение · {{ confidence_labels.get(item.get("level", "medium"), item.get("level", "medium")) }}</strong>
-            <span>{{ item.get("description", "") }}</span>
-            <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
-        </div>
-        {% endfor %}
-        {% for item in confidence.get("risks", []) if item.get("level") != "high" %}
-        <div class="confidence-row {{ item.get("level", "medium") }}">
-            <strong>Риск · {{ confidence_labels.get(item.get("level", "medium"), item.get("level", "medium")) }}</strong>
-            <span>{{ item.get("description", "") }}</span>
-            <small>{{ ", ".join(item.get("flags", [])) }}{% if item.get("reason") %} · {{ item.get("reason") }}{% endif %}</small>
-        </div>
-        {% endfor %}
-        {% if not metrics.get("low_confidence_count", 0) %}
-        <div class="empty">Спорных мест в последнем анализе нет.</div>
-        {% endif %}
     </div>
 </section>
 
