@@ -71,7 +71,7 @@ def _deepseek_silver_request(
                     url,
                     json=payload,
                     headers=headers,
-                    timeout=300  #DEEPSEEK_TIMEOUT_SECONDS,
+                    timeout=300,  #DEEPSEEK_TIMEOUT_SECONDS, #thinking mode times out
                 )
                 if response.status_code >= 400:
                     raise RuntimeError(
