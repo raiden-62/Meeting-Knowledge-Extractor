@@ -581,10 +581,10 @@ button:disabled {
 
 .review-row {
     display: grid;
-    grid-template-columns: 220px minmax(260px, 1fr) 180px 126px 116px 150px 126px;
+    grid-template-columns: minmax(340px, 1.1fr) minmax(260px, 1fr) 180px 126px 116px 150px 126px;
     gap: 8px;
-    align-items: center;
-    min-width: 1178px;
+    align-items: start;
+    min-width: 1346px;
     padding: 10px;
     border: 1px solid var(--border);
     border-left: 4px solid var(--danger);
@@ -596,6 +596,7 @@ button:disabled {
     display: grid;
     gap: 3px;
     min-width: 0;
+    align-self: stretch;
 }
 
 .review-meta strong {
@@ -700,11 +701,25 @@ button:disabled {
 
 .review-meta span,
 .review-meta small {
-    overflow: hidden;
     color: var(--muted);
     font-size: 12px;
+    line-height: 1.3;
+}
+
+.review-meta span {
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.review-meta small {
+    overflow: visible;
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
+.review-row > textarea[name="description"] {
+    min-width: 0;
 }
 
 .review-actions {

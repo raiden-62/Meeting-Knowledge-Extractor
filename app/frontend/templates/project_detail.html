@@ -166,7 +166,7 @@
                 <small>{{ suggestion.confidence_reason }}</small>
                 {% endif %}
             </div>
-            <input type="text" name="description" value="{{ suggestion.description }}" required>
+            <textarea name="description" class="task-title-input" rows="1" title="{{ suggestion.description }}" required data-autosize>{{ suggestion.description }}</textarea>
             <select name="person_id" aria-label="Кому поручена">
                 <option value="">Без ответственного</option>
                 {% for person in people %}
