@@ -1,38 +1,44 @@
 JUDGE_PROMPT = """
-Вы оцениваете качество системы извлечения знаний по итогам встречи.
+You are evaluating a meeting knowledge extraction result.
 
-Вам предоставлены:
-1. Исходная стенограмма
-2. JSON-ответ, сгенерированный другой ИИ-моделью
+You receive:
+1. The source transcript.
+2. The extractor JSON output.
 
-Оцените ответ по следующим метрикам:
+Evaluate the current product shape:
+- summary
+- tasks with assignee, status, priority, due_date
+- task_updates for existing tasks
+- decisions
+- risks
+- people
 
-- missed_tasks (пропущенные задачи)
-- missed_decisions (пропущенные решения)
-- misattributed_tasks (неверно назначенные задачи)
-- clarity_rating (оценка чёткости)
-- overall_score (общая оценка)
+Rules:
+- Count only clear errors against facts present in the transcript.
+- Do not penalize wording differences when the extracted item preserves the same meaning.
+- A hallucinated item is an extracted task/update/decision/risk/person not supported by the transcript.
+- clarity_rating and overall_score are integers from 1 to 10.
+- Return JSON only.
 
-Правила:
-- missed_tasks: целое число — количество явно пропущенных задач
-- missed_decisions: целое число — количество явно пропущенных решений
-- misattributed_tasks: целое число — количество задач, назначенных не тем людям
-- clarity_rating: целое число от 1 до 10 включительно
-- overall_score: целое число от 1 до 10 включительно
-
-Верните ТОЛЬКО валидный JSON по следующей схеме:
-
+Return exactly this schema:
 {{
   "missed_tasks": 0,
+  "missed_task_updates": 0,
   "missed_decisions": 0,
-  "misattributed_tasks": 0,
+  "missed_risks": 0,
+  "assignee_errors": 0,
+  "status_errors": 0,
+  "priority_errors": 0,
+  "due_date_errors": 0,
+  "hallucinated_items": 0,
   "clarity_rating": 0,
-  "overall_score": 0
+  "overall_score": 0,
+  "comments": "short explanation"
 }}
 
-Стенограмма:
+Transcript:
 {transcript}
 
-Ответ лайт-модели:
+Extractor JSON:
 {response}
 """

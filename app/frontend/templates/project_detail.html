@@ -1,0 +1,406 @@
+{% extends "base.html" %}
+{% block content %}
+{% set metrics = latest_output.get("metrics", {}) if latest_output else {} %}
+{% set risks = latest_output.get("risks", []) if latest_output else [] %}
+{% set task_updates = latest_output.get("task_updates", []) if latest_output else [] %}
+{% set agent_notes = latest_output.get("agent_notes", []) if latest_output else [] %}
+{% set status_labels = {"todo": "сделать", "in_progress": "в работе", "done": "готово"} %}
+{% set priority_labels = {"low": "низкая", "medium": "средняя", "high": "высокая"} %}
+{% set confidence_labels = {"low": "низкая", "medium": "средняя", "high": "высокая"} %}
+
+<section class="project-header">
+    <form class="project-inline-form" action="/projects/{{ project.id }}/edit" method="post" data-dirty-check>
+        <p class="kicker">Проект #{{ project.id }}</p>
+        <input type="text" name="name" class="project-title-input" value="{{ project.name }}" aria-label="Название проекта" required>
+        <textarea name="description" class="project-description-input" rows="2" placeholder="Без описания" aria-label="Описание проекта">{{ project.description or "" }}</textarea>
+        <button type="submit" class="primary inline-save" data-dirty-submit disabled>Сохранить</button>
+    </form>
+    <div class="header-actions">
+        <a class="ghost-link" href="/projects/{{ project.id }}/export.md">Экспорт MD</a>
+        <a class="ghost-link" href="/projects/{{ project.id }}/export.txt">Экспорт TXT</a>
+        <a class="ghost-link" href="/projects">Назад к проектам</a>
+        <form action="/projects/{{ project.id }}/delete" method="post" class="inline-delete-form" onsubmit="return confirm('Удалить проект и все связанные данные?');">
+            <button type="submit" class="danger">Удалить проект</button>
+        </form>
+    </div>
+</section>
+
+<section class="stats-grid" aria-label="Сводка проекта">
+    <div class="stat">
+        <span>Задачи</span>
+        <strong>{{ task_stats.total }}</strong>
+        <small>{{ task_stats.todo }} сделать · {{ task_stats.in_progress }} в работе · {{ task_stats.done }} готово</small>
+    </div>
+    <div class="stat">
+        <span>Решения</span>
+        <strong>{{ decisions|length }}</strong>
+        <small>сохранены в проекте</small>
+    </div>
+    <div class="stat">
+        <span>Ответственные</span>
+        <strong>{{ people|length }}</strong>
+        <small>участники с задачами</small>
+    </div>
+    <div class="stat">
+        <span>Последний запуск</span>
+        <strong>{{ "%.2f"|format(runs[0].response_time_seconds or 0) if runs else "0.00" }}s</strong>
+        <small>{{ runs[0].provider if runs else "не запускался" }}</small>
+    </div>
+</section>
+
+<section class="panel search-section">
+    <form class="search-bar" method="get" action="/projects/{{ project.id }}">
+        <input type="search" name="q" value="{{ filters.q }}" placeholder="Поиск по задачам, решениям, людям и стенограммам">
+        <button type="submit" class="primary">Найти</button>
+        <a class="ghost-link" href="/projects/{{ project.id }}">Сбросить</a>
+    </form>
+    {% if search.query %}
+    <div class="search-results">
+        <div>
+            <h3>Задачи</h3>
+            {% for item in search.tasks %}
+            <p><strong>#{{ item.id }}</strong> {{ item.title }} <span class="meta">{{ item.meta }}</span></p>
+            {% else %}<p class="muted">Ничего не найдено.</p>{% endfor %}
+        </div>
+        <div>
+            <h3>Решения</h3>
+            {% for item in search.decisions %}
+            <p><strong>#{{ item.id }}</strong> {{ item.title }} <span class="meta">{{ item.meta }}</span></p>
+            {% else %}<p class="muted">Ничего не найдено.</p>{% endfor %}
+        </div>
+        <div>
+            <h3>Стенограммы</h3>
+            {% for item in search.transcripts %}
+            <p><strong>#{{ item.id }}</strong> {{ item.title }} <span class="meta">{{ item.meta }}</span><br><span class="muted">{{ item.snippet }}</span></p>
+            {% else %}<p class="muted">Ничего не найдено.</p>{% endfor %}
+        </div>
+        <div>
+            <h3>Люди</h3>
+            {% for item in search.people %}
+            <p><strong>#{{ item.id }}</strong> {{ item.title }} <span class="meta">{{ item.meta }}</span></p>
+            {% else %}<p class="muted">Ничего не найдено.</p>{% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</section>
+
+<section class="layout-two">
+    <div class="panel">
+        <h2>Загрузка стенограммы</h2>
+        <form action="/projects/{{ project.id }}/transcripts" method="post" enctype="multipart/form-data" data-transcript-upload>
+            <label>
+                Дата встречи
+                <input type="date" name="meeting_date" value="{{ today_date }}" required data-meeting-date-input>
+            </label>
+            <label>
+                TXT/MD-файл
+                <input type="file" name="file" accept=".txt,.md,text/plain,text/markdown" data-transcript-file-input>
+            </label>
+            <label>
+                Или вставьте текст
+                <textarea name="transcript_text" rows="8" maxlength="{{ max_transcript_chars }}" placeholder="Вставьте стенограмму встречи до {{ max_transcript_chars }} символов" data-transcript-text-input></textarea>
+            </label>
+            <button type="submit" class="primary">Сохранить стенограмму</button>
+        </form>
+    </div>
+
+    <div class="panel">
+        <h2>LLM-анализ</h2>
+        <form action="/projects/{{ project.id }}/extract" method="post">
+            <label>
+                Стенограмма
+                <select name="transcript_id" required>
+                    {% for transcript in transcripts %}
+                    <option value="{{ transcript.id }}">
+                        #{{ transcript.id }} · {{ transcript.source_filename or "Вставленный текст" }} · {{ transcript.meeting_date.strftime("%d.%m.%Y") if transcript.meeting_date else transcript.created_at.strftime("%d.%m.%Y") }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                API-провайдер
+                <select name="provider">
+                    {% for provider in llm_providers %}
+                    <option value="{{ provider }}" {% if provider == llm_provider %}selected{% endif %}>{{ provider }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button type="submit" class="primary" {% if not transcripts %}disabled{% endif %}>Запустить извлечение</button>
+        </form>
+
+        <div class="insight-box">
+            <span class="meta">Последняя сводка</span>
+            <p>{{ latest_output.get("summary", "Запустите анализ, чтобы получить краткое резюме встречи.") if latest_output else "Запустите анализ, чтобы получить краткое резюме встречи." }}</p>
+            <div class="metric-line">
+                <span>{{ metrics.get("tasks_count", 0) }} задач</span>
+                <span>{{ metrics.get("decisions_count", 0) }} решений</span>
+                <span>{{ metrics.get("risks_count", 0) }} рисков</span>
+                <span>{{ metrics.get("task_updates_count", 0) }} обновлений</span>
+                {% if metrics.get("parallel_chunks_count", 0) %}
+                <span>{{ metrics.get("parallel_chunks_count", 0) }} чанков</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="panel review-section">
+    <div class="section-head">
+        <div>
+            <h2>Задачи с низкой уверенностью</h2>
+            <p class="muted">Предложения по задачам с низкой уверенностью остаются здесь до тех пор, пока они не будут приняты или отклонены.</p>
+        </div>
+    </div>
+    <div class="review-list">
+        {% for suggestion in pending_task_suggestions %}
+        <form id="accept-suggestion-{{ suggestion.id }}" action="/projects/{{ project.id }}/task-suggestions/{{ suggestion.id }}/accept" method="post" class="review-row {{ suggestion.confidence_level }}">
+            <div class="review-meta">
+                <strong>{{ confidence_labels.get(suggestion.confidence_level, suggestion.confidence_level) }}</strong>
+                {% if suggestion.confidence_score is not none %}
+                <span>{{ "%.0f"|format(suggestion.confidence_score * 100) }}%</span>
+                {% endif %}
+                {% if suggestion.confidence_flags %}
+                <small>{{ ", ".join(suggestion.confidence_flags) }}</small>
+                {% endif %}
+                {% if suggestion.confidence_reason %}
+                <small>{{ suggestion.confidence_reason }}</small>
+                {% endif %}
+            </div>
+            <textarea name="description" class="task-title-input" rows="1" title="{{ suggestion.description }}" required data-autosize>{{ suggestion.description }}</textarea>
+            <select name="person_id" aria-label="Кому поручена">
+                <option value="">Без ответственного</option>
+                {% for person in people %}
+                <option value="{{ person.id }}" {% if suggestion.assignee_name and person.name|lower == suggestion.assignee_name|lower %}selected{% endif %}>{{ person.name }}</option>
+                {% endfor %}
+            </select>
+            <select name="status" aria-label="Статус">
+                <option value="todo" {% if suggestion.status == "todo" %}selected{% endif %}>сделать</option>
+                <option value="in_progress" {% if suggestion.status == "in_progress" %}selected{% endif %}>в работе</option>
+                <option value="done" {% if suggestion.status == "done" %}selected{% endif %}>готово</option>
+            </select>
+            <select name="priority" aria-label="Важность">
+                <option value="low" {% if suggestion.priority == "low" %}selected{% endif %}>низкая</option>
+                <option value="medium" {% if suggestion.priority == "medium" %}selected{% endif %}>средняя</option>
+                <option value="high" {% if suggestion.priority == "high" %}selected{% endif %}>высокая</option>
+            </select>
+            <input type="date" name="due_date" value="{{ suggestion.due_date.isoformat() if suggestion.due_date else '' }}" aria-label="Дата поручения">
+            <div class="review-actions">
+                <button type="submit" class="primary">Принять</button>
+                <button type="submit" class="danger" form="reject-suggestion-{{ suggestion.id }}">Отклонить</button>
+            </div>
+        </form>
+        <form id="reject-suggestion-{{ suggestion.id }}" action="/projects/{{ project.id }}/task-suggestions/{{ suggestion.id }}/reject" method="post" class="hidden-form"></form>
+        {% else %}
+        <div class="empty">Нет задач с низкой уверенностью.</div>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="layout-two">
+    <div class="panel">
+        <div class="section-head">
+            <h2>Обновления задач</h2>
+        </div>
+        <ul class="stack">
+            {% for update in task_updates %}
+            <li>
+                #{{ update.get("task_id") or "?" }} · {{ status_labels.get(update.get("status", "done"), update.get("status", "done")) }} ·
+                {{ update.get("description", "задача") }}
+                {% if update.get("reason") %}<span class="meta">- {{ update.get("reason") }}</span>{% endif %}
+            </li>
+            {% else %}
+            <li class="muted">В последнем запуске агент не нашёл изменений статусов.</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="panel">
+        <div class="section-head">
+            <h2>Агенты</h2>
+        </div>
+        <ul class="stack">
+            {% for note in agent_notes %}
+            <li>{{ note }}</li>
+            {% else %}
+            <li class="muted">Заметки агентов появятся после анализа.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</section>
+
+<section class="layout-two">
+    <div class="panel">
+        <div class="section-head">
+            <h2>Решения</h2>
+        </div>
+        <form action="/projects/{{ project.id }}/decisions" method="post" class="inline-form">
+            <input type="text" name="description" placeholder="Новое решение" required>
+            <button type="submit">Добавить</button>
+        </form>
+        <ul class="stack">
+            {% for decision in decisions %}
+            <li>{{ decision.description }}</li>
+            {% else %}
+            <li class="muted">Решений пока нет.</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="panel">
+        <div class="section-head">
+            <h2>Риски и блокеры</h2>
+        </div>
+        <ul class="stack">
+            {% for risk in risks %}
+            <li>{{ risk }}</li>
+            {% else %}
+            <li class="muted">Явных рисков в последнем запуске нет.</li>
+            {% endfor %}
+        </ul>
+    </div>
+</section>
+
+<section class="panel task-section">
+    <div class="section-head">
+        <div>
+            <h2>Задачи</h2>
+            <p class="muted">Одна задача - одна строка: справа ответственный, статус, важность и дата поручения.</p>
+        </div>
+    </div>
+
+    <div class="task-workspace">
+        <form action="/projects/{{ project.id }}/tasks" method="post" class="task-add-row">
+            <input type="text" name="description" placeholder="Новая задача" required>
+            <select name="person_id" aria-label="Кому поручена">
+                <option value="">Без ответственного</option>
+                {% for person in people %}
+                <option value="{{ person.id }}">{{ person.name }}</option>
+                {% endfor %}
+            </select>
+            <select name="status" aria-label="Статус">
+                <option value="todo">сделать</option>
+                <option value="in_progress">в работе</option>
+                <option value="done">готово</option>
+            </select>
+            <select name="priority" aria-label="Важность">
+                <option value="low">низкая</option>
+                <option value="medium" selected>средняя</option>
+                <option value="high">высокая</option>
+            </select>
+            <button type="submit" class="primary">Добавить</button>
+        </form>
+
+        <form class="task-list-head task-filter-head" method="get" action="/projects/{{ project.id }}" data-preserve-scroll>
+            {% if filters.q %}<input type="hidden" name="q" value="{{ filters.q }}">{% endif %}
+            <span>Задача</span>
+            <details class="filter-menu">
+                <summary>Кому поручена</summary>
+                <div class="filter-options">
+                    <label>
+                        <input type="checkbox" name="person_id" value="no_assignee" {% if filters.include_no_assignee %}checked{% endif %} onchange="this.form.requestSubmit()">
+                        Без ответственного
+                    </label>
+                    {% for person in people %}
+                    <label>
+                        <input type="checkbox" name="person_id" value="{{ person.id }}" {% if person.id in filters.person_ids %}checked{% endif %} onchange="this.form.requestSubmit()">
+                        {{ person.name }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </details>
+            <details class="filter-menu">
+                <summary>Статус</summary>
+                <div class="filter-options">
+                    <label><input type="checkbox" name="status" value="todo" {% if "todo" in filters.statuses %}checked{% endif %} onchange="this.form.requestSubmit()"> сделать</label>
+                    <label><input type="checkbox" name="status" value="in_progress" {% if "in_progress" in filters.statuses %}checked{% endif %} onchange="this.form.requestSubmit()"> в работе</label>
+                    <label><input type="checkbox" name="status" value="done" {% if "done" in filters.statuses %}checked{% endif %} onchange="this.form.requestSubmit()"> готово</label>
+                </div>
+            </details>
+            <details class="filter-menu">
+                <summary>Важность</summary>
+                <div class="filter-options">
+                    <label><input type="checkbox" name="priority" value="low" {% if "low" in filters.priorities %}checked{% endif %} onchange="this.form.requestSubmit()"> низкая</label>
+                    <label><input type="checkbox" name="priority" value="medium" {% if "medium" in filters.priorities %}checked{% endif %} onchange="this.form.requestSubmit()"> средняя</label>
+                    <label><input type="checkbox" name="priority" value="high" {% if "high" in filters.priorities %}checked{% endif %} onchange="this.form.requestSubmit()"> высокая</label>
+                </div>
+            </details>
+            <div class="date-sort">
+                <span>Дата поручения</span>
+                <button type="submit" name="sort_date" value="desc" class="{% if filters.sort_date == 'desc' %}active{% endif %}" aria-label="Сначала новые">↓</button>
+                <button type="submit" name="sort_date" value="asc" class="{% if filters.sort_date == 'asc' %}active{% endif %}" aria-label="Сначала старые">↑</button>
+            </div>
+            <a class="ghost-link" href="/projects/{{ project.id }}{% if filters.q %}?q={{ filters.q }}{% endif %}">Сбросить</a>
+        </form>
+
+        <div class="task-list">
+        {% for task in tasks %}
+            <form id="edit-task-{{ task.id }}" action="/projects/{{ project.id }}/tasks/{{ task.id }}/edit" method="post" class="task-row" data-dirty-check>
+                <textarea name="description" class="task-title-input" rows="1" title="{{ task.description }}" required data-autosize>{{ task.description }}</textarea>
+                <select name="person_id" aria-label="Кому поручена">
+                    <option value="">Без ответственного</option>
+                    {% for person in people %}
+                    <option value="{{ person.id }}" {% if task.person_id == person.id %}selected{% endif %}>{{ person.name }}</option>
+                    {% endfor %}
+                </select>
+                <select name="status" aria-label="Статус">
+                    <option value="todo" {% if task.status == "todo" %}selected{% endif %}>сделать</option>
+                    <option value="in_progress" {% if task.status == "in_progress" %}selected{% endif %}>в работе</option>
+                    <option value="done" {% if task.status == "done" %}selected{% endif %}>готово</option>
+                </select>
+                <select name="priority" aria-label="Важность">
+                    <option value="low" {% if task.priority == "low" %}selected{% endif %}>низкая</option>
+                    <option value="medium" {% if task.priority == "medium" %}selected{% endif %}>средняя</option>
+                    <option value="high" {% if task.priority == "high" %}selected{% endif %}>высокая</option>
+                </select>
+                <span class="task-assigned-date" title="Дата встречи: {{ task.meeting_date.strftime("%d.%m.%Y") if task.meeting_date else task.created_at.strftime("%d.%m.%Y") }}. Обновлено: {{ task.updated_at.strftime("%d.%m.%Y %H:%M") }}">Дата поручения: {{ task.meeting_date.strftime("%d.%m.%Y") if task.meeting_date else task.created_at.strftime("%d.%m.%Y") }}</span>
+                <div class="task-actions">
+                    <button type="submit" class="primary" data-dirty-submit disabled>Сохранить</button>
+                    <button type="submit" class="danger" form="delete-task-{{ task.id }}">Удалить</button>
+                </div>
+            </form>
+            <form id="delete-task-{{ task.id }}" action="/projects/{{ project.id }}/tasks/{{ task.id }}/delete" method="post" class="hidden-form"></form>
+        {% else %}
+            <div class="empty">Задач по выбранным фильтрам нет.</div>
+        {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="layout-two">
+    <div class="panel">
+        <h2>Ответственные</h2>
+        <form action="/projects/{{ project.id }}/people" method="post" class="person-row person-add-row">
+            <input type="text" name="name" placeholder="Имя" required>
+            <input type="text" name="role" placeholder="Роль">
+            <button type="submit">Добавить</button>
+        </form>
+        <div class="people-list">
+            {% for person in people %}
+            <form action="/projects/{{ project.id }}/people/{{ person.id }}/edit" method="post" class="person-row" data-dirty-check>
+                <input type="text" name="name" value="{{ person.name }}" required>
+                <input type="text" name="role" value="{{ person.role or '' }}" placeholder="Роль">
+                <button type="submit" data-dirty-submit disabled>Сохранить</button>
+            </form>
+            {% else %}
+            <div class="muted">Участники появятся после анализа или ручного добавления.</div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="panel">
+        <h2>История запусков</h2>
+        <div class="run-list">
+            {% for run in runs %}
+            <div class="run-row">
+                <strong>Запуск #{{ run.id }}</strong>
+                <span>{{ run.provider }} · {{ run.model_name or "по умолчанию" }}</span>
+                <span>{{ run.status }} · {{ "%.2f"|format(run.response_time_seconds or 0) }}s</span>
+                <small>{{ run.created_at.strftime("%Y-%m-%d %H:%M") }}</small>
+            </div>
+            {% else %}
+            <div class="muted">Запусков пока нет.</div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}
