@@ -18,8 +18,10 @@ class EvaluationConfig:
     dataset_pattern: str = "*.txt"
     limit: int | None = None
     provider: str = LLM_PROVIDER
-    model: str | None = None
+    extractor_model: str | None = None
     judge_enabled: bool = True
+    judge_provider: str = LLM_PROVIDER
+    judge_model: str | None = None
     deterministic_scoring_enabled: bool = True
     require_expected: bool = False
     fail_under: float | None = None

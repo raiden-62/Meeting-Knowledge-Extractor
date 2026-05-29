@@ -24,7 +24,7 @@ class PipelineRunResult:
 
 
 @contextmanager
-def _temporary_model_override(provider: str | None, model: str | None) -> Iterator[None]:
+def temporary_model_override(provider: str | None, model: str | None) -> Iterator[None]:
     if not model:
         yield
         return
@@ -57,7 +57,7 @@ def run_pipeline(transcript: str, options: PipelineRunOptions | None = None) -> 
     options = options or PipelineRunOptions()
 
     start = time.time()
-    with _temporary_model_override(options.provider, options.model):
+    with temporary_model_override(options.provider, options.model):
         response = process_meeting(transcript, provider=options.provider)
     elapsed = time.time() - start
 

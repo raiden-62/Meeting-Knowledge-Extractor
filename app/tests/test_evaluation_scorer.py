@@ -69,3 +69,32 @@ def test_scorer_uses_token_overlap_for_reordered_text():
     score = score_expected_vs_actual(expected, actual)
 
     assert score["categories"]["decisions"]["matched"] == 1
+
+
+def test_scorer_scores_task_update_due_dates():
+    expected = {
+        "task_updates": [
+            {
+                "description": "Перенести аудит вентиляции",
+                "assignee": "Алексей",
+                "status": "in_progress",
+                "due_date": "19.06.2026",
+            }
+        ]
+    }
+    actual = {
+        "task_updates": [
+            {
+                "description": "Аудит вентиляции перенесен",
+                "assignee": "Алексей",
+                "status": "в работе",
+                "due_date": "2026-06-19",
+            }
+        ]
+    }
+
+    score = score_expected_vs_actual(expected, actual)
+    update_score = score["categories"]["task_updates"]
+
+    assert update_score["matched"] == 1
+    assert update_score["field_accuracy"]["due_date"] == 1.0

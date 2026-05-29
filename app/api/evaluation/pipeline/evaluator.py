@@ -25,7 +25,7 @@ def evaluate_case(case: TranscriptCase, config: EvaluationConfig) -> dict:
 
     run_result = run_pipeline(
         case.transcript,
-        PipelineRunOptions(provider=config.provider, model=config.model),
+        PipelineRunOptions(provider=config.provider, model=config.extractor_model),
     )
 
     deterministic = None
@@ -33,7 +33,12 @@ def evaluate_case(case: TranscriptCase, config: EvaluationConfig) -> dict:
         deterministic = score_expected_vs_actual(expected.labels, run_result.response)
 
     if config.judge_enabled:
-        evaluation = evaluate_response(case.transcript, run_result.response)
+        evaluation = evaluate_response(
+            case.transcript,
+            run_result.response,
+            provider=config.judge_provider,
+            model=config.judge_model,
+        )
     else:
         evaluation = skipped_evaluation()
 
@@ -53,5 +58,7 @@ def evaluate_case(case: TranscriptCase, config: EvaluationConfig) -> dict:
             "provider": run_result.provider,
             "requested_model": run_result.requested_model,
             "actual_model": run_result.actual_model,
+            "judge_provider": config.judge_provider if config.judge_enabled else None,
+            "judge_model": config.judge_model if config.judge_enabled else None,
         },
     }

@@ -6,6 +6,26 @@ def _average(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 4) if values else None
 
 
+def _field_summary(values: list[dict]) -> dict[str, dict]:
+    fields = sorted(
+        {
+            field
+            for value in values
+            for field in (value.get("field_totals") or {}).keys()
+        }
+    )
+    summary: dict[str, dict] = {}
+    for field in fields:
+        total = sum(int((value.get("field_totals") or {}).get(field, 0)) for value in values)
+        matched = sum(int((value.get("field_matches") or {}).get(field, 0)) for value in values)
+        summary[field] = {
+            "matched": matched,
+            "total": total,
+            "accuracy": round(matched / total, 4) if total else None,
+        }
+    return summary
+
+
 def save_detailed_report(
     file_name: str,
     transcript: str,
@@ -98,6 +118,7 @@ def generate_summary_report(
             "average_precision": _average([float(value["precision"]) for value in values if value.get("precision") is not None]),
             "average_recall": _average([float(value["recall"]) for value in values if value.get("recall") is not None]),
             "average_f1": _average([float(value["f1"]) for value in values if value.get("f1") is not None]),
+            "fields": _field_summary(values),
             "total_expected": sum(int(value.get("expected", 0)) for value in values),
             "total_actual": sum(int(value.get("actual", 0)) for value in values),
             "total_matched": sum(int(value.get("matched", 0)) for value in values),

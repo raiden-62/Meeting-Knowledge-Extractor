@@ -6,6 +6,7 @@ from typing import Any
 
 TEXT_FIELDS = ("description", "title", "text", "name")
 TASK_FIELDS = ("assignee", "status", "priority", "due_date")
+TASK_UPDATE_FIELDS = ("assignee", "status", "due_date")
 PUNCT_TRANSLATION = str.maketrans(
     {
         "ё": "е",
@@ -282,17 +283,22 @@ def _score_collection(
     }
 
 
-def _score_tasks(expected_tasks: list[Any], actual_tasks: list[Any]) -> dict[str, Any]:
-    matches, missed, extra = _match_items(expected_tasks, actual_tasks, threshold=0.45)
-    field_totals = {field: 0 for field in TASK_FIELDS}
-    field_matches = {field: 0 for field in TASK_FIELDS}
+def _score_items_with_fields(
+    expected_items: list[Any],
+    actual_items: list[Any],
+    fields_to_score: tuple[str, ...],
+    threshold: float,
+) -> dict[str, Any]:
+    matches, missed, extra = _match_items(expected_items, actual_items, threshold=threshold)
+    field_totals = {field: 0 for field in fields_to_score}
+    field_matches = {field: 0 for field in fields_to_score}
     enriched_matches: list[dict[str, Any]] = []
 
     for match in matches:
         expected = match["expected"]
         actual = match["actual"]
         fields: dict[str, bool] = {}
-        for field in TASK_FIELDS:
+        for field in fields_to_score:
             expected_value = _field_value(expected, field)
             if expected_value:
                 field_totals[field] += 1
@@ -303,16 +309,36 @@ def _score_tasks(expected_tasks: list[Any], actual_tasks: list[Any]) -> dict[str
 
     field_accuracy = {
         field: round(field_matches[field] / field_totals[field], 4) if field_totals[field] else None
-        for field in TASK_FIELDS
+        for field in fields_to_score
     }
 
     return {
-        **_f1(len(matches), len(expected_tasks), len(actual_tasks)),
+        **_f1(len(matches), len(expected_items), len(actual_items)),
+        "field_totals": field_totals,
+        "field_matches": field_matches,
         "field_accuracy": field_accuracy,
         "matches": enriched_matches,
         "missed_items": missed,
         "extra_items": extra,
     }
+
+
+def _score_tasks(expected_tasks: list[Any], actual_tasks: list[Any]) -> dict[str, Any]:
+    return _score_items_with_fields(
+        expected_tasks,
+        actual_tasks,
+        fields_to_score=TASK_FIELDS,
+        threshold=0.45,
+    )
+
+
+def _score_task_updates(expected_updates: list[Any], actual_updates: list[Any]) -> dict[str, Any]:
+    return _score_items_with_fields(
+        expected_updates,
+        actual_updates,
+        fields_to_score=TASK_UPDATE_FIELDS,
+        threshold=0.45,
+    )
 
 
 def _labels_list(labels: dict[str, Any], key: str) -> list[Any]:
@@ -330,10 +356,9 @@ def _people_items(value: Any) -> list[Any]:
 
 def score_expected_vs_actual(expected_labels: dict[str, Any], actual: dict[str, Any]) -> dict[str, Any]:
     task_score = _score_tasks(_labels_list(expected_labels, "tasks"), _labels_list(actual, "tasks"))
-    task_update_score = _score_collection(
+    task_update_score = _score_task_updates(
         _labels_list(expected_labels, "task_updates"),
         _labels_list(actual, "task_updates"),
-        threshold=0.45,
     )
     decision_score = _score_collection(
         _labels_list(expected_labels, "decisions"),

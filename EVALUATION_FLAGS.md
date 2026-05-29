@@ -19,8 +19,11 @@ Use `evaluate.cmd` on Windows if PowerShell script execution is disabled. `evalu
 | `--pattern GLOB` | `*.txt` | Selects which transcripts to run, for example `"engineering*.txt"`. |
 | `--limit N` | none | Runs only the first `N` matched transcripts. |
 | `--provider gigachat\|deepseek` | `.env` `LLM_PROVIDER` | Chooses the extraction provider. |
-| `--model MODEL` | provider env default | Temporarily overrides the extraction model for this evaluation run. |
+| `--extractor-model MODEL` | provider env default | Temporarily overrides the extraction model for this evaluation run. |
+| `--model MODEL` | provider env default | Deprecated alias for `--extractor-model`. |
 | `--skip-judge` | off | Skips the LLM judge and runs deterministic scoring only. |
+| `--judge-provider gigachat\|deepseek` | extractor provider | Chooses the LLM judge provider independently from extraction. |
+| `--judge-model MODEL` | judge provider env default | Temporarily overrides the judge model for this evaluation run. |
 | `--skip-deterministic` | off | Skips expected JSON comparison and runs extraction/judge only. |
 | `--require-expected` | off | Treats a missing expected JSON as an error for that transcript. |
 | `--fail-under SCORE` | none | Exits with failure if average deterministic score is below `SCORE`. |
@@ -39,6 +42,18 @@ Run with DeepSeek and fail if average deterministic score is below `0.75`:
 
 ```powershell
 .\evaluate.cmd --provider deepseek --pattern "engineering*.txt" --skip-judge --require-expected --fail-under 0.75
+```
+
+Run extraction with DeepSeek and judge with GigaChat:
+
+```powershell
+.\evaluate.cmd --provider deepseek --judge-provider gigachat --pattern "engineering*.txt"
+```
+
+Run extraction and judge with explicit models:
+
+```powershell
+.\evaluate.cmd --provider deepseek --extractor-model deepseek-chat --judge-provider deepseek --judge-model deepseek-chat --pattern "engineering*.txt"
 ```
 
 Run one transcript and keep judge enabled:

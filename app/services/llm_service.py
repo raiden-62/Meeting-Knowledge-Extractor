@@ -787,7 +787,7 @@ def build_prompt(transcript: str, memory_context: str | None = None) -> str:
 Извлеки:
 1. Краткое резюме встречи.
 2. Принятые решения.
-3. Новые задачи с ответственными, статусом todo/in_progress/done и приоритетом low/medium/high.
+3. Новые задачи с ответственными, статусом todo/in_progress/done, приоритетом low/medium/high и сроком due_date.
 4. Людей и их задачи.
 5. Обновления существующих задач из памяти проекта.
 6. Риски, блокеры и зависимости.
@@ -800,17 +800,17 @@ def build_prompt(transcript: str, memory_context: str | None = None) -> str:
 - Если задача начата или находится в работе, добавь ее в task_updates со status "in_progress".
 - Если задача уже есть в памяти проекта, не дублируй ее в tasks, а обнови через task_updates.
 - Если видишь номер задачи из памяти проекта, обязательно верни task_id.
-- Сроки задач не извлекай: интерфейс проекта сейчас использует дату поручения, статус и важность.
+- Сроки задач извлекай в due_date в формате YYYY-MM-DD, если в стенограмме есть конкретная дата или ее можно вывести из даты встречи. Если срок неясен, верни null.
 
 Верни только JSON по схеме:
 {{
   "summary": "...",
   "decisions": ["..."],
   "tasks": [
-    {{"description": "...", "assignee": "...", "status": "todo", "priority": "medium"}}
+    {{"description": "...", "assignee": "...", "status": "todo", "priority": "medium", "due_date": "YYYY-MM-DD or null"}}
   ],
   "task_updates": [
-    {{"task_id": 1, "description": "...", "assignee": "...", "status": "done", "reason": "в стенограмме сказано, что задача готова"}}
+    {{"task_id": 1, "description": "...", "assignee": "...", "status": "done", "due_date": "YYYY-MM-DD or null", "reason": "в стенограмме сказано, что задача готова"}}
   ],
   "people": {{"Имя": ["задача"]}},
   "risks": ["..."],
