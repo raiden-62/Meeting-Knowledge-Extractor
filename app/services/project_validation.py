@@ -40,6 +40,10 @@ def validate_transcript_file(file: UploadFile) -> None:
         raise HTTPException(status_code=400, detail="Only .txt and .md transcripts are supported")
 
 
+def has_transcript_file(file: UploadFile | None) -> bool:
+    return bool(file and (file.filename or "").strip())
+
+
 def read_transcript_upload(file: UploadFile) -> str:
     validate_transcript_file(file)
     data = file.file.read()

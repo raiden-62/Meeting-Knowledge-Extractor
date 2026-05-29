@@ -17,6 +17,7 @@ from app.services.project_service import delete_project
 from app.services.project_validation import (
     clean_optional_text,
     clean_required_text,
+    has_transcript_file,
     parse_due_date,
     parse_optional_int,
     parse_submitted_meeting_date,
@@ -434,12 +435,11 @@ def upload_transcript(
     content = None
     filename = None
 
-    if file is not None:
+    if transcript_text and transcript_text.strip():
+        content = transcript_text
+    elif has_transcript_file(file):
         content = read_transcript_upload(file)
         filename = file.filename
-
-    if transcript_text:
-        content = transcript_text
 
     if content is None:
         raise HTTPException(status_code=400, detail="Transcript content is required")

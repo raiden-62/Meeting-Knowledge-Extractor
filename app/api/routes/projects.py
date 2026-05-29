@@ -22,12 +22,13 @@ from app.services.llm_service import LLMProviderError
 from app.services.project_service import delete_project
 from app.services.project_validation import (
     clean_required_text,
+    has_transcript_file,
+    parse_submitted_meeting_date,
     read_transcript_upload,
     validate_priority,
     validate_provider,
     validate_status,
     validate_transcript_content,
-    parse_submitted_meeting_date,
 )
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -77,12 +78,11 @@ def add_transcript(
     content = None
     filename = None
 
-    if file is not None:
+    if transcript_text and transcript_text.strip():
+        content = transcript_text
+    elif has_transcript_file(file):
         content = read_transcript_upload(file)
         filename = file.filename
-
-    if transcript_text:
-        content = transcript_text
 
     if content is None:
         raise HTTPException(status_code=400, detail="Transcript content is required")

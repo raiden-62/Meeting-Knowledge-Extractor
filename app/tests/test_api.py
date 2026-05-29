@@ -719,6 +719,36 @@ def test_project_upload_accepts_md_and_rejects_other_files():
     assert bad_response.json()["detail"] == "Only .txt and .md transcripts are supported"
 
 
+def test_project_upload_accepts_pasted_text_with_empty_file_part():
+    project_response = client.post(
+        "/api/projects",
+        json={"name": "Pasted Transcript", "description": "multipart text upload"},
+    )
+    project_id = project_response.json()["id"]
+
+    api_response = client.post(
+        f"/api/projects/{project_id}/transcripts",
+        data={"transcript_text": "Anna will prepare the board update."},
+        files={"file": ("", b"", "application/octet-stream")},
+    )
+    assert api_response.status_code == 200
+    assert api_response.json()["source_filename"] is None
+    db = SessionLocal()
+    try:
+        transcript = db.query(models.Transcript).filter(models.Transcript.id == api_response.json()["id"]).one()
+        assert transcript.content == "Anna will prepare the board update."
+    finally:
+        db.close()
+
+    web_response = client.post(
+        f"/projects/{project_id}/transcripts",
+        data={"transcript_text": "Bob will confirm the launch date."},
+        files={"file": ("", b"", "application/octet-stream")},
+        follow_redirects=False,
+    )
+    assert web_response.status_code == 303
+
+
 def test_project_export_and_search(monkeypatch):
     monkeypatch.setattr(
         extraction_service,
